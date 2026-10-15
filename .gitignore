@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+
+# 引擎与模型（体积大，不入库；打包脚本会收集）
+backend/engines/**/*.zip
+backend/engines/**/*.bin.gz
+backend/engines/**/katago.exe
+backend/engines/**/*.dll
+backend/engines/**/*.cfg
+backend/engines/opencltuning*
+
+# 运行产物
+records/*.sgf
+*.log
+
+# 工具截图
+.playwright-mcp/
