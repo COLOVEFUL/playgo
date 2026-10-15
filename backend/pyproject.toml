@@ -1,0 +1,50 @@
+[project]
+name = "playgo-backend"
+version = "0.1.0"
+description = "弈 · PlayGo —— 本地围棋对弈（KataGo AI / 复盘 / 形势判断）后端"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "ty>=0.0.1a5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # 文档字符串风格不强制
+    "COM812",  # 与 ruff format 冲突
+    "ISC001",  # 同上
+    "T201",    # 允许 print（本地工具）
+    "S101",    # 测试中允许 assert
+    "PLR2004", # 测试中的魔法数字
+    "RUF001",  # 全角标点是本项目的正文（中文 UI）
+    "RUF002",
+    "RUF003",
+    "CPY001",  # 不要求版权头
+    "ANN",     # 注解逐步补
+    "N818",    # IllegalMove 域内惯用名
+    "FBT001",  # 布尔位参在内部 API 可接受
+    "FBT002",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S311", "ARG001", "SLF001", "INP001", "C901", "PLR0912"]
+
+[tool.ty.environment]
+python-version = "3.11"
