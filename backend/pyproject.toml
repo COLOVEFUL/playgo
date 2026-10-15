@@ -41,10 +41,20 @@ ignore = [
     "N818",    # IllegalMove 域内惯用名
     "FBT001",  # 布尔位参在内部 API 可接受
     "FBT002",
+    "DTZ005",  # 本地应用用本地时间即可
+    "TRY300",  # try/else 风格不强求
+    "S112",    # 损坏谱跳过属正常
+    "ASYNC109",  # timeout 参数名与 asyncio 习惯一致
+    "PLR0911", # 状态机分支多属正常
+    "PLR0913", # 内部 API 参数数放宽
+    "ERA001",  # 保留少量被注释的说明代码
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S311", "ARG001", "SLF001", "INP001", "C901", "PLR0912"]
+"src/playgo/downloader.py" = ["S310"]   # URL 均为硬编码官方源
+"src/playgo/katago.py" = ["S311"]       # 游戏采样用伪随机即可
+"src/playgo/main.py" = ["SLF001", "RUF006", "DTZ005", "TRY401", "TRY300", "S112", "ASYNC109", "PLR0911", "PLR0913"]
 
 [tool.ty.environment]
 python-version = "3.11"

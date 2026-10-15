@@ -23,3 +23,6 @@ records/*.sgf
 
 # 工具截图
 .playwright-mcp/
+
+# 会话/工具目录
+.claude/
