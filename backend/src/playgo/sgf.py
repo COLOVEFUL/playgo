@@ -35,8 +35,8 @@ class SgfGame:
     size: int = 19
     komi: float = 7.5
     rule: str = "Chinese"
-    black_name: str = "黑方"
-    white_name: str = "白方"
+    black_name: str = "Black"
+    white_name: str = "White"
     date: str = ""
     result: str = ""
     main_time: int = 1800
@@ -100,11 +100,11 @@ def parse_sgf(text: str) -> SgfGame:
 
 
 def save_record(g: SgfGame, records_dir: Path) -> Path:
-    """保存到 records/YYYY-MM-DD/NN-结果.sgf，返回路径。"""
+    """保存到 records/YYYY-MM-DD/NNN-结果.sgf，返回路径。结果用 SGF 标准码（语言中立）。"""
     day_dir = records_dir / (g.date or datetime.now().strftime("%Y-%m-%d"))
     day_dir.mkdir(parents=True, exist_ok=True)
     seq = len(list(day_dir.glob("*.sgf"))) + 1
-    tag = (g.result or "?").replace("+", "胜").replace(",", "-")
+    tag = (g.result or "?").replace(",", "-")
     path = day_dir / f"{seq:03d}-{tag}.sgf"
     n = 1
     while path.exists():

@@ -29,8 +29,8 @@ class GameConfig:
     human_color: int = BLACK  # ai 模式下人类执子
     komi: float = settings.KOMI
     time: settings.TimeSettings = field(default_factory=settings.TimeSettings)
-    black_name: str = "黑方"
-    white_name: str = "白方"
+    black_name: str = "Black"
+    white_name: str = "White"
 
     def ai_color(self) -> int | None:
         return opponent(self.human_color) if self.mode == MODE_AI else None
@@ -127,10 +127,10 @@ class GameSession:
     def _check_turn(self, color: int) -> None:
         if self.status != STATUS_PLAYING:
             msg = "对局已结束"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="game.ended")
         if color != self.to_play:
             msg = "还没轮到这一方行棋"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="game.not_your_turn")
 
     def _settle_clock(self, color: int) -> float:
         """把本手耗时结算到行棋方时钟，返回剩余秒数（无限时为 -1）。"""
@@ -163,7 +163,7 @@ class GameSession:
         if clock.periods_left > 0:
             clock.periods_left -= 1
         if clock.periods_left <= 0:
-            self._end(opponent(color), "timeout", "超时判负")
+            self._end(opponent(color), "timeout")
             return True
         clock.byo_left = float(self.cfg.time.byo_seconds)
         return False
@@ -173,7 +173,7 @@ class GameSession:
         self._settle_clock(color)
         if self.status == STATUS_ENDED:  # 落子瞬间恰好超时
             msg = "超时判负"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="game.ended_by_timeout")
         r = self.board.play(color, point)
         return self._record(color, r.point, r.captured)
 
@@ -182,7 +182,7 @@ class GameSession:
         self._settle_clock(color)
         if self.status == STATUS_ENDED:
             msg = "超时判负"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="game.ended_by_timeout")
         self.board.play(color, None)
         rec = self._record(color, None, [])
         if self.board.is_over_by_passes():
@@ -206,8 +206,7 @@ class GameSession:
         if self.status == STATUS_ENDED:
             return
         self._settle_clock(color)
-        name = "黑方" if color == BLACK else "白方"
-        self._end(opponent(color), "resign", f"{name}中盘认输")
+        self._end(opponent(color), "resign")
 
     # ── 悔棋 ─────────────────────────────────────────────
 
@@ -310,49 +309,38 @@ class GameSession:
     def set_dead_stones(self, points: set[int]) -> None:
         if self.status != STATUS_SCORING:
             msg = "不在点目阶段"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="scoring.not_active")
         self.dead_stones = points
         self._refresh_score()
 
     def _refresh_score(self) -> None:
         s = self.board.score(self.dead_stones)
+        # 文案由前端按 winner/margin/black_area/white_area 本地化组合
         self.score_preview = {
             "black_area": s.black_area,
             "white_area": s.white_area,
             "winner": s.winner,
             "margin": s.margin,
             "ownership": s.ownership,  # 1黑 2白 0中立（点目视角）
-            "text": self._score_text(s),
         }
-
-    def _score_text(self, s) -> str:
-        if not s.winner:
-            return "和棋（双方目数相同）"
-        who = "黑" if s.winner == BLACK else "白"
-        return f"{who}胜 {s.margin:g} 子（黑 {s.black_area:g} : 白 {s.white_area:g} 含贴目）"
 
     def confirm_score(self) -> dict:
         """确认点目 → 终局。"""
         if self.status != STATUS_SCORING:
             msg = "不在点目阶段"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="scoring.not_active")
         s = self.board.score(self.dead_stones)
-        text = self._score_text(s)
-        self._end(s.winner, "score", text)
+        self._end(s.winner, "score", s.margin)
         return self.result or {}
 
-    def _end(self, winner: int | None, reason: str, detail: str) -> None:
+    def _end(self, winner: int | None, reason: str, margin: float = 0.0) -> None:
         self.status = STATUS_ENDED
         self.ai_thinking = False
         self.result = {
             "winner": winner,
             "reason": reason,
-            "detail": detail,
-            "sgf_result": result_string(
-                winner,
-                reason,
-                (self.score_preview or {}).get("margin", 0.0) if reason == "score" else 0.0,
-            ),
+            "margin": margin,
+            "sgf_result": result_string(winner, reason, margin),
         }
 
     def to_sgf(self) -> SgfGame:
@@ -363,8 +351,7 @@ class GameSession:
         }
         ai_color = cfg.ai_color()
         if ai_color:
-            preset = settings.DIFFICULTY_PRESETS[cfg.difficulty]
-            names[ai_color] = f"KataGo·{preset['label']}"
+            names[ai_color] = f"KataGo ({cfg.difficulty})"
         return SgfGame(
             size=self.board.size,
             komi=cfg.komi,

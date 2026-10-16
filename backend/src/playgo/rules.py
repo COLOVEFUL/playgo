@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from playgo.errors import PlayGoError
+
 EMPTY = 0
 BLACK = 1
 WHITE = 2
@@ -19,8 +21,8 @@ def opponent(color: int) -> int:
     return BLACK + WHITE - color
 
 
-class IllegalMove(Exception):
-    """非法落子（占位/自杀/打劫等）。"""
+class IllegalMove(PlayGoError):
+    """非法落子（占位/自杀/打劫等）。code 供前端本地化文案。"""
 
 
 @dataclass(frozen=True)
@@ -117,10 +119,10 @@ class Board:
 
         if not 0 <= point < self.size * self.size:
             msg = f"落点越界: {point}"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="move.out_of_bounds", params={"point": point})
         if self.grid[point] != EMPTY:
             msg = f"该点已有棋子: {point}"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="move.occupied", params={"point": point})
 
         snapshot = bytes(self.grid)
         captured = self._try_play(color, point, snapshot)
@@ -136,7 +138,7 @@ class Board:
             return []
         if not 0 <= point < self.size * self.size or self.grid[point] != EMPTY:
             msg = "非法落点"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="move.illegal")
         if snapshot is None:
             snapshot = bytes(self.grid)
 
@@ -157,13 +159,13 @@ class Board:
         if not my_libs:
             self.grid = bytearray(snapshot)  # 自杀，还原
             msg = "禁着点：自杀"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="move.suicide")
 
         key = (bytes(self.grid), opponent(color))
         if self.superko and key in self._pos_keys:
             self.grid = bytearray(snapshot)  # 打劫（重现历史局面），还原
             msg = "打劫：不可立即重现先前局面"
-            raise IllegalMove(msg)
+            raise IllegalMove(msg, code="move.superko")
 
         self.captures[color] += len(captured)
         self._pos_keys.add(key)

@@ -57,15 +57,13 @@ class TimeSettings:
         }
 
 
-# ── AI 难度档位（b18c384nbt 网络，参考社区棋力对照表） ──────────────
+# ── AI 难度档位（难度文案由前端词典提供，键即 difficulty） ──────────
 # visits     : 引擎搜索量上限
 # sample_top : 采样候选宽度（取 moveInfos 前 N）
 # prior_pow  : 先验概率幂次（<1 越小越“平”，越容易走出人类的随手棋）
 # GPU/CPU 自适应：CPU(Eigen) 下 hard 的 visits 会自动降到 cpu_visits
 DIFFICULTY_PRESETS: dict[str, dict] = {
     "easy": {
-        "label": "简单",
-        "strength": "约 15k ~ 5k",
         "visits": 4,
         "cpu_visits": 4,
         "pick": "sample",
@@ -73,8 +71,6 @@ DIFFICULTY_PRESETS: dict[str, dict] = {
         "prior_pow": 0.30,
     },
     "medium": {
-        "label": "中等",
-        "strength": "约业余 1 ~ 4 段",
         "visits": 48,
         "cpu_visits": 32,
         "pick": "sample",
@@ -82,8 +78,6 @@ DIFFICULTY_PRESETS: dict[str, dict] = {
         "prior_pow": 0.70,
     },
     "hard": {
-        "label": "困难",
-        "strength": "超职业棋力",
         "visits": 800,
         "cpu_visits": 160,
         "pick": "best",

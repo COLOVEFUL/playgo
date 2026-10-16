@@ -17,7 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from playgo import settings
-from playgo.downloader import DownloadManager, installed
+from playgo.downloader import DownloadError, DownloadManager, installed
+from playgo.errors import err_detail, payload_of
 from playgo.game import STATUS_ENDED, STATUS_PLAYING, STATUS_SCORING, GameConfig, GameSession
 from playgo.katago import Analysis, EngineError, EngineManager
 from playgo.rules import BLACK, EMPTY, WHITE, IllegalMove
@@ -105,7 +106,7 @@ class AppState:
                 g.play(g.to_play, point)
         except (EngineError, IllegalMove) as e:
             log.exception("AI 行棋失败: %s", e)
-            asyncio.ensure_future(self.broadcast({"type": "error", "message": f"AI 行棋失败：{e}"}))
+            asyncio.ensure_future(self.broadcast({"type": "error", "error": payload_of(e)}))
         finally:
             if g:
                 g.ai_thinking = False
@@ -176,8 +177,8 @@ class NewGameReq(BaseModel):
     human_color: int = BLACK
     time_preset: str = "standard"  # standard | blitz | long | free
     komi: float = settings.KOMI
-    black_name: str = "黑方"
-    white_name: str = "白方"
+    black_name: str = "Black"
+    white_name: str = "White"
 
 
 class MoveReq(BaseModel):
@@ -237,7 +238,7 @@ async def new_game(req: NewGameReq) -> dict:
 
 def _game() -> GameSession:
     if not state.game:
-        raise HTTPException(400, "还没有开始对局")
+        raise HTTPException(400, err_detail("game.not_started"))
     return state.game
 
 
@@ -247,7 +248,7 @@ async def play_move(req: MoveReq) -> dict:
     try:
         g.play(g.to_play, req.point)
     except IllegalMove as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, err_detail(e.code, e.params)) from e
     state.emit_state()
     state.schedule_ai()
     return {"ok": True}
@@ -259,7 +260,7 @@ async def pass_move() -> dict:
     try:
         g.pass_move(g.to_play)
     except IllegalMove as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, err_detail(e.code, e.params)) from e
     state.emit_state()
     if g.status == STATUS_SCORING:
         await state.auto_scoring()
@@ -298,7 +299,7 @@ async def set_dead_stones(req: DeadStonesReq) -> dict:
     try:
         g.set_dead_stones(set(req.points))
     except IllegalMove as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, err_detail(e.code, e.params)) from e
     state.emit_state()
     return {"ok": True, "score_preview": g.score_preview}
 
@@ -309,7 +310,7 @@ async def confirm_score() -> dict:
     try:
         g.confirm_score()
     except IllegalMove as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(400, err_detail(e.code, e.params)) from e
     await finalize_game()
     state.emit_state()
     return {"ok": True, "result": g.result}
@@ -333,7 +334,7 @@ async def hint() -> dict:
     try:
         ana = await state.analyze_current(territory=False)
     except EngineError as e:
-        raise HTTPException(503, str(e)) from e
+        raise HTTPException(503, err_detail(e.code, e.params)) from e
     assert ana is not None
     top = ana.best_moves[:3]
     return {
@@ -359,7 +360,7 @@ async def territory() -> dict:
     try:
         ana = await state.analyze_current(territory=True)
     except EngineError as e:
-        raise HTTPException(503, str(e)) from e
+        raise HTTPException(503, err_detail(e.code, e.params)) from e
     assert ana is not None
     return {
         "move_count": len(g.moves),
@@ -381,7 +382,7 @@ async def records() -> list[dict]:
 async def record_detail(file_path: str) -> dict:
     f = settings.RECORDS_DIR / file_path
     if not f.exists() or f.suffix != ".sgf":
-        raise HTTPException(404, "棋谱不存在")
+        raise HTTPException(404, err_detail("record.not_found"))
     g = parse_sgf(f.read_text(encoding="utf-8"))
     analysis_file = f.with_suffix(".analysis.json")
     analysis = None
@@ -404,7 +405,7 @@ async def record_detail(file_path: str) -> dict:
 async def review_analyze(req: ReviewReq) -> dict:
     f = settings.RECORDS_DIR / req.file
     if not f.exists():
-        raise HTTPException(404, "棋谱不存在")
+        raise HTTPException(404, err_detail("record.not_found"))
     job_key = req.file
     job = state.review_jobs.get(job_key)
     if job and not job.get("done") and job.get("task") and not job["task"].done():
@@ -460,7 +461,7 @@ async def review_analyze(req: ReviewReq) -> dict:
         except Exception as e:
             log.exception("复盘分析失败: %s", e)
             state.review_jobs[job_key]["error"] = str(e)
-            await state.broadcast({"type": "review_error", "file": job_key, "error": str(e)})
+            await state.broadcast({"type": "review_error", "file": job_key, "error": payload_of(e)})
 
     task = asyncio.create_task(_run())
     state.review_jobs[job_key] = {"task": task, "progress": 0, "done": False}
@@ -481,15 +482,15 @@ async def engine_status() -> dict:
 @app.post("/api/engines/download")
 async def engine_download(req: DownloadReq) -> dict:
     if state.downloads.busy:
-        raise HTTPException(409, "已有下载任务进行中")
+        raise HTTPException(409, err_detail("download.busy"))
 
     def on_progress(ev: dict) -> None:
         asyncio.ensure_future(state.broadcast({"type": "download", **ev}))
 
     try:
         state.downloads.start(req.ids, on_progress)
-    except RuntimeError as e:
-        raise HTTPException(409, str(e)) from e
+    except DownloadError as e:
+        raise HTTPException(409, err_detail(e.code, e.params)) from e
 
     # 下载完成后自动切换到更强引擎
     async def _after() -> None:

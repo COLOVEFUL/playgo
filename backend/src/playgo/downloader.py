@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from playgo import settings
+from playgo.errors import DownloadError
 
 ProgressCb = Callable[[dict], None]
 
@@ -20,7 +21,6 @@ def _items() -> dict[str, dict]:
             "url": settings.URL_STRONG_MODEL,
             "kind": "file",
             "dest": settings.DOWNLOADED_DIR / settings.STRONG_MODEL_NAME,
-            "label": "强网络 b18c384nbt（94MB）",
         },
         "opencl-exe": {
             "url": settings.URL_OPENCL_ZIP,
@@ -28,7 +28,6 @@ def _items() -> dict[str, dict]:
             "dest": settings.DOWNLOADED_DIR / "katago-opencl.zip",
             "extract_to": settings.DOWNLOADED_DIR / "opencl",
             "marker": settings.DOWNLOADED_DIR / "opencl" / "katago.exe",
-            "label": "GPU 引擎 OpenCL（6MB）",
         },
         "eigen-exe": {
             "url": settings.URL_EIGEN_ZIP,
@@ -36,7 +35,6 @@ def _items() -> dict[str, dict]:
             "dest": settings.BUNDLED_DIR / "katago-eigen.zip",
             "extract_to": settings.BUNDLED_DIR / "eigen",
             "marker": settings.BUNDLED_DIR / "eigen" / "katago.exe",
-            "label": "CPU 引擎 Eigen（6MB）",
         },
     }
 
@@ -85,10 +83,16 @@ def _download_one(id_: str, cb: ProgressCb | None) -> None:
             cb and cb({"id": id_, "phase": "extracting", "pct": 100})
             with zipfile.ZipFile(dest) as z:
                 z.extractall(item["extract_to"])
-        cb and cb({"id": id_, "phase": "done", "pct": 100, "label": item["label"]})
+        cb and cb({"id": id_, "phase": "done", "pct": 100})
     except Exception as e:
         tmp.unlink(missing_ok=True)
-        cb and cb({"id": id_, "phase": "error", "error": str(e)})
+        cb and cb(
+            {
+                "id": id_,
+                "phase": "error",
+                "error": {"code": "download.failed", "args": {"detail": str(e)}},
+            }
+        )
         raise
 
 
@@ -104,11 +108,11 @@ class DownloadManager:
     def start(self, ids: list[str], cb: ProgressCb) -> None:
         if self.busy:
             msg = "已有下载任务进行中"
-            raise RuntimeError(msg)
+            raise DownloadError(msg, code="download.busy")
         valid = [i for i in ids if i in _items()]
         if not valid:
             msg = "没有可下载项"
-            raise RuntimeError(msg)
+            raise DownloadError(msg, code="download.no_items")
         self.active_ids = set(valid)
 
         async def _run() -> None:

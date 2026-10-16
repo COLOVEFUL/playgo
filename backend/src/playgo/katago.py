@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from playgo import settings
+from playgo.errors import PlayGoError
 from playgo.rules import BLACK
 
 if TYPE_CHECKING:
@@ -52,8 +53,8 @@ class Analysis:
     visits: int = 0
 
 
-class EngineError(RuntimeError):
-    pass
+class EngineError(PlayGoError):
+    """引擎错误。code 供前端本地化文案。"""
 
 
 class KataGoEngine:
@@ -128,7 +129,7 @@ class KataGoEngine:
             except OSError as e:
                 msg = f"引擎启动失败: {e}"
                 self.failed_reason = msg
-                raise EngineError(msg) from e
+                raise EngineError(msg, code="engine.start_failed", params={"detail": str(e)}) from e
 
             self._reader = asyncio.create_task(self._read_stdout())
             self._watcher = asyncio.create_task(self._read_stderr())
@@ -139,7 +140,9 @@ class KataGoEngine:
                 await self.stop()
                 msg = "引擎就绪超时（120s）"
                 self.failed_reason = msg
-                raise EngineError(msg) from None
+                raise EngineError(
+                    msg, code="engine.ready_timeout", params={"seconds": 120}
+                ) from None
             self.ready = True
             log.info("引擎就绪: %s", self.describe())
 
@@ -153,7 +156,11 @@ class KataGoEngine:
             tail = "\n".join(self._stderr_tail)
             msg = f"引擎进程退出(code={self.proc.returncode}): {tail[-800:]}"
             self.failed_reason = msg
-            raise EngineError(msg)
+            raise EngineError(
+                msg,
+                code="engine.exited",
+                params={"code": self.proc.returncode, "tail": tail[-800:]},
+            )
 
     _any_response_seen = False
     _ready_line_seen = False
@@ -185,7 +192,8 @@ class KataGoEngine:
         # 进程结束：唤醒所有等待者
         for fut in self._pending.values():
             if not fut.done():
-                fut.set_exception(EngineError("引擎进程已退出"))
+                msg = "引擎进程已退出"
+                fut.set_exception(EngineError(msg, code="engine.exited"))
 
     async def _read_stderr(self) -> None:
         assert self.proc
@@ -225,7 +233,7 @@ class KataGoEngine:
         """分析当前局面。moves 为已落子的历史（不含即将走的一手）。"""
         if not self.ready:
             msg = "引擎未就绪"
-            raise EngineError(msg)
+            raise EngineError(msg, code="engine.not_ready")
         rid = uuid.uuid4().hex[:12]
         payload = {
             "id": rid,
@@ -252,7 +260,9 @@ class KataGoEngine:
             data = await asyncio.wait_for(fut, timeout)
         except TimeoutError:
             msg = f"分析超时({timeout}s)"
-            raise EngineError(msg) from None
+            raise EngineError(
+                msg, code="engine.analyze_timeout", params={"timeout": timeout}
+            ) from None
         finally:
             self._pending.pop(rid, None)
 
@@ -353,17 +363,17 @@ class EngineManager:
         return cands
 
     def missing_for_download(self) -> list[dict]:
-        """列出可下载补齐项。"""
+        """列出可下载补齐项（label 由前端按 id 本地化）。"""
         need = []
         model = settings.DOWNLOADED_DIR / settings.STRONG_MODEL_NAME
         opencl = settings.DOWNLOADED_DIR / "opencl" / "katago.exe"
         eigen = settings.BUNDLED_DIR / "eigen" / "katago.exe"
         if not model.exists():
-            need.append({"id": "strong-model", "label": "强网络 b18c384nbt", "size_mb": 94})
+            need.append({"id": "strong-model", "size_mb": 94})
         if not opencl.exists():
-            need.append({"id": "opencl-exe", "label": "GPU 引擎 (OpenCL)", "size_mb": 6})
+            need.append({"id": "opencl-exe", "size_mb": 6})
         if not eigen.exists():
-            need.append({"id": "eigen-exe", "label": "CPU 引擎 (Eigen)", "size_mb": 6})
+            need.append({"id": "eigen-exe", "size_mb": 6})
         return need
 
     def status(self) -> dict:
@@ -382,7 +392,7 @@ class EngineManager:
         cands = self._candidates()
         if not cands:
             msg = "未找到可用引擎，请先下载"
-            raise EngineError(msg)
+            raise EngineError(msg, code="engine.not_installed")
 
         async def _start() -> KataGoEngine:
             last_err: Exception | None = None
@@ -395,7 +405,7 @@ class EngineManager:
                     last_err = e
                     log.warning("引擎 %s 启动失败: %s", cand.backend, e)
             msg = f"所有引擎启动失败: {last_err}"
-            raise EngineError(msg)
+            raise EngineError(msg, code="engine.all_failed", params={"detail": str(last_err)})
 
         self._starting = asyncio.create_task(_start())
         try:

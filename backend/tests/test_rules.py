@@ -16,8 +16,18 @@ def test_place_and_occupy():
     b = Board()
     b.play(BLACK, pt(b, 3, 3))
     assert b.color_at(pt(b, 3, 3)) == BLACK
-    with pytest.raises(IllegalMove):
+    with pytest.raises(IllegalMove) as ei:
         b.play(WHITE, pt(b, 3, 3))
+    assert ei.value.code == "move.occupied"
+    assert ei.value.params == {"point": pt(b, 3, 3)}
+
+
+def test_out_of_bounds():
+    b = Board()
+    with pytest.raises(IllegalMove) as ei:
+        b.play(BLACK, 999)
+    assert ei.value.code == "move.out_of_bounds"
+    assert ei.value.params == {"point": 999}
 
 
 def test_capture_single_stone():
@@ -55,8 +65,9 @@ def test_suicide_illegal():
     b.play(BLACK, pt(b, 1, 0))
     b.play(WHITE, pt(b, 18, 18))
     b.play(BLACK, pt(b, 0, 1))
-    with pytest.raises(IllegalMove):
+    with pytest.raises(IllegalMove) as ei:
         b.play(WHITE, pt(b, 0, 0))
+    assert ei.value.code == "move.suicide"
     assert b.color_at(pt(b, 0, 0)) == EMPTY  # 状态未变
 
 
@@ -91,8 +102,9 @@ def test_ko_immediate_recapture_illegal():
     r = b.play(BLACK, pt(b, 2, 1))  # 黑提白(1,1)
     assert r.captured == [pt(b, 1, 1)]
 
-    with pytest.raises(IllegalMove):
+    with pytest.raises(IllegalMove) as ei:
         b.play(WHITE, pt(b, 1, 1))  # 立即回提 → 重现局面 → 非法
+    assert ei.value.code == "move.superko"
 
     b.play(WHITE, pt(b, 10, 10))  # 白先寻劫材
     b.play(BLACK, pt(b, 10, 11))
