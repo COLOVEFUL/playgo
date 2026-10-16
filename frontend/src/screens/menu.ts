@@ -1,22 +1,32 @@
 /** 主菜单：新对局 / 继续对局 / 棋谱库 / 引擎管理。 */
 
 import { api, onWs } from "../api";
+import { errPayloadText, errText, t } from "../i18n";
+import type { MsgKey } from "../i18n";
 import type { EngineStatus, GameState, RecordItem } from "../types";
 import { closeDialog, engineStatus, showDialog, showScreen, toast } from "../main";
 
-const DIFFS = [
-  { id: "easy", label: "简单", note: "约 15k~5k" },
-  { id: "medium", label: "中等", note: "约业余 1~4 段" },
-  { id: "hard", label: "困难", note: "超职业棋力" },
+// 选项表携带字面量键，渲染期再 t()（语言切换后可重渲染）
+const DIFFS: { id: string; labelKey: MsgKey; noteKey: MsgKey }[] = [
+  { id: "easy", labelKey: "diff.easy", noteKey: "diff.easy_note" },
+  { id: "medium", labelKey: "diff.medium", noteKey: "diff.medium_note" },
+  { id: "hard", labelKey: "diff.hard", noteKey: "diff.hard_note" },
 ];
-const TIMES = [
-  { id: "standard", label: "30:00", note: "读秒60s×3" },
-  { id: "blitz", label: "5:00", note: "读秒30s×3" },
-  { id: "long", label: "60:00", note: "读秒60s×5" },
-  { id: "free", label: "不限时", note: "" },
+const TIMES: { id: string; label: string; noteKey: MsgKey }[] = [
+  { id: "standard", label: "30:00", noteKey: "time.standard_note" },
+  { id: "blitz", label: "5:00", noteKey: "time.blitz_note" },
+  { id: "long", label: "60:00", noteKey: "time.long_note" },
+  { id: "free", label: "", noteKey: "time.free_note" },
 ];
 
+const DIFF_KEY: Record<string, MsgKey> = {
+  easy: "diff.easy",
+  medium: "diff.medium",
+  hard: "diff.hard",
+};
+
 let sel = { mode: "ai", diff: "medium", color: 1, time: "standard" };
+let panelMode: "engine" | "records" = "engine";
 
 export function initMenu(): void {
   const root = document.getElementById("screen-menu")!;
@@ -24,21 +34,21 @@ export function initMenu(): void {
   <div class="menu-main">
     <div class="menu-hero">
       <div class="big">弈</div>
-      <div class="slogan">棋 逢 对 手 · 落 子 无 悔</div>
+      <div class="slogan">${t("menu.slogan")}</div>
     </div>
     <div class="menu-cards" id="resume-slot"></div>
     <div class="menu-cards">
       <div class="mcard" id="card-new">
-        <div class="ico">⚫</div><h2>人机对弈</h2>
-        <p>与 KataGo 引擎对局，三档棋力。可随时启用 AI 推荐与形势判断。</p>
+        <div class="ico">⚫</div><h2>${t("menu.card_ai")}</h2>
+        <p>${t("menu.card_ai_desc")}</p>
       </div>
       <div class="mcard" id="card-pvp">
-        <div class="ico">⚪</div><h2>双人对弈</h2>
-        <p>同屏轮流落子，黑先白后，完整计时与读秒规则。</p>
+        <div class="ico">⚪</div><h2>${t("menu.card_pvp")}</h2>
+        <p>${t("menu.card_pvp_desc")}</p>
       </div>
       <div class="mcard" id="card-records">
-        <div class="ico">📖</div><h2>棋谱库 · 复盘</h2>
-        <p>浏览历史对局，逐步回放，AI 深度复盘与胜率曲线。</p>
+        <div class="ico">📖</div><h2>${t("menu.card_review")}</h2>
+        <p>${t("menu.card_review_desc")}</p>
       </div>
     </div>
     <div class="panel menu-panel" id="menu-panel"></div>
@@ -51,18 +61,25 @@ export function initMenu(): void {
 }
 
 export async function refreshMenu(focus?: string): Promise<void> {
+  panelMode = focus === "records" ? "records" : focus ? "engine" : panelMode;
   // 继续对局卡片
   const slot = document.getElementById("resume-slot")!;
   try {
     const st = await api<{ game: GameState | null; engine?: EngineStatus }>("/api/state");
     const panel = document.getElementById("menu-panel")!;
     if (st.game && st.game.status !== "ended") {
-      const diff = { easy: "简单", medium: "中等", hard: "困难" }[st.game.difficulty] ?? "";
+      const diff = t(DIFF_KEY[st.game.difficulty] ?? "diff.medium");
+      const color = t(st.game.human_color === 1 ? "common.black_stone" : "common.white_stone");
       slot.innerHTML = `
         <div class="mcard" id="card-resume" style="border-color:rgba(126,180,120,.45)">
-          <div class="ico">⏵</div><h2>回到对局</h2>
-          <p>${st.game.mode === "ai" ? `人机 · ${diff} · ${st.game.human_color === 1 ? "执黑" : "执白"}` : "双人对弈"}
-          · 第 ${st.game.moves.length + 1} 手 · ${st.game.names.black} vs ${st.game.names.white}</p>
+          <div class="ico">⏵</div><h2>${t("menu.resume")}</h2>
+          <p>${st.game.mode === "ai"
+            ? t("menu.resume_ai", { diff, color })
+            : t("menu.resume_pvp")}
+          · ${t("menu.move_n", { n: st.game.moves.length + 1 })} · ${t("menu.vs", {
+            black: st.game.names.black,
+            white: st.game.names.white,
+          })}</p>
         </div>`;
       document.getElementById("card-resume")!.addEventListener("click", () => showScreen("play"));
     } else {
@@ -73,16 +90,17 @@ export async function refreshMenu(focus?: string): Promise<void> {
     const eng = es?.engine;
     const missing = es?.missing ?? [];
     const engLine = eng
-      ? `引擎就绪：KataGo ${eng.gpu ? "GPU·OpenCL" : "CPU·Eigen"} + ${eng.model}`
-      : missing.length
-        ? `<span style="color:#e8a04c">引擎未就绪</span>`
-        : "引擎未就绪";
+      ? t("menu.engine_ready", {
+          backend: t(eng.gpu ? "engine.opencl" : "engine.eigen"),
+          model: eng.model,
+        })
+      : `<span style="color:#e8a04c">${t("menu.engine_not_ready")}</span>`;
     panel.innerHTML = `
       <div class="sec" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
         <span style="font-size:12.5px">${engLine}</span>
         <div style="flex:1"></div>
-        ${missing.length ? `<button class="btn primary" id="btn-dl" style="padding:7px 16px;font-size:12px">下载增强引擎</button>` : ""}
-        <button class="btn" id="btn-recheck" style="padding:7px 16px;font-size:12px">刷新</button>
+        ${missing.length ? `<button class="btn primary" id="btn-dl" style="padding:7px 16px;font-size:12px">${t("menu.download_btn")}</button>` : ""}
+        <button class="btn" id="btn-recheck" style="padding:7px 16px;font-size:12px">${t("menu.refresh")}</button>
       </div>`;
     const dl = document.getElementById("btn-dl");
     if (dl) dl.addEventListener("click", showDownload);
@@ -92,43 +110,49 @@ export async function refreshMenu(focus?: string): Promise<void> {
   } catch {
     /* 后端未就绪 */
   }
-  if (focus === "records") showRecords();
+  if (panelMode === "records") await showRecords();
 }
 
 // ── 新对局 ──
 function showNewGame(mode: "ai" | "pvp"): void {
   sel.mode = mode;
   const d = showDialog(`
-    <h2>${mode === "ai" ? "人机对弈" : "双人对弈"}</h2>
+    <h2>${t(mode === "ai" ? "ng.ai_title" : "ng.pvp_title")}</h2>
     <div class="body">
       <div class="form-grid">
         ${mode === "ai" ? `
-        <div class="form-item"><label>AI 难度</label>
-          <div class="seg" id="seg-diff">${DIFFS.map((x) => `<button data-v="${x.id}" class="${x.id === sel.diff ? "on" : ""}">${x.label}<span class="note">${x.note}</span></button>`).join("")}</div>
+        <div class="form-item"><label>${t("ng.difficulty")}</label>
+          <div class="seg" id="seg-diff">${DIFFS.map(
+            (x) =>
+              `<button data-v="${x.id}" class="${x.id === sel.diff ? "on" : ""}">${t(x.labelKey)}<span class="note">${t(x.noteKey)}</span></button>`,
+          ).join("")}</div>
         </div>
-        <div class="form-item"><label>您的执子</label>
+        <div class="form-item"><label>${t("ng.your_color")}</label>
           <div class="seg" id="seg-color">
-            <button data-v="1" class="${sel.color === 1 ? "on" : ""}">执黑先行</button>
-            <button data-v="2" class="${sel.color === 2 ? "on" : ""}">执白后行</button>
+            <button data-v="1" class="${sel.color === 1 ? "on" : ""}">${t("ng.black_first")}</button>
+            <button data-v="2" class="${sel.color === 2 ? "on" : ""}">${t("ng.white_second")}</button>
           </div>
         </div>` : `
-        <div class="form-item"><label>黑方名称</label><input class="btn" id="in-black" value="黑方" style="text-align:left"></div>
-        <div class="form-item"><label>白方名称</label><input class="btn" id="in-white" value="白方" style="text-align:left"></div>`}
-        <div class="form-item"><label>用时</label>
-          <div class="seg" id="seg-time">${TIMES.map((x) => `<button data-v="${x.id}" class="${x.id === sel.time ? "on" : ""}">${x.label}<span class="note">${x.note}</span></button>`).join("")}</div>
+        <div class="form-item"><label>${t("ng.black_name")}</label><input class="btn" id="in-black" value="${t("play.default_black")}" style="text-align:left"></div>
+        <div class="form-item"><label>${t("ng.white_name")}</label><input class="btn" id="in-white" value="${t("play.default_white")}" style="text-align:left"></div>`}
+        <div class="form-item"><label>${t("ng.time")}</label>
+          <div class="seg" id="seg-time">${TIMES.map(
+            (x) =>
+              `<button data-v="${x.id}" class="${x.id === sel.time ? "on" : ""}">${x.label || t("time.free_label")}<span class="note">${t(x.noteKey)}</span></button>`,
+          ).join("")}</div>
         </div>
-        <div class="form-item"><label>贴目（中国规则数子法）</label>
+        <div class="form-item"><label>${t("ng.komi")}</label>
           <div class="seg" id="seg-komi">
-            <button data-v="7.5" class="on">7.5 目（标准）</button>
-            <button data-v="6.5">6.5 目</button>
-            <button data-v="0.5">0.5 目（让子棋用）</button>
+            <button data-v="7.5" class="on">${t("ng.komi_std")}</button>
+            <button data-v="6.5">${t("ng.komi_65")}</button>
+            <button data-v="0.5">${t("ng.komi_handi")}</button>
           </div>
         </div>
       </div>
     </div>
     <div class="actions">
-      <button class="btn" id="dlg-cancel">取消</button>
-      <button class="btn primary" id="dlg-start">开始对局</button>
+      <button class="btn" id="dlg-cancel">${t("ng.cancel")}</button>
+      <button class="btn primary" id="dlg-start">${t("ng.start")}</button>
     </div>`);
 
   const bindSeg = (id: string, cb: (v: string) => void) => {
@@ -149,49 +173,50 @@ function showNewGame(mode: "ai" | "pvp"): void {
   d.querySelector("#dlg-cancel")!.addEventListener("click", closeDialog);
   d.querySelector("#dlg-start")!.addEventListener("click", async () => {
     try {
+      const ib = d.querySelector("#in-black") as HTMLInputElement | null;
+      const iw = d.querySelector("#in-white") as HTMLInputElement | null;
       await api("/api/game/new", {
         mode,
         difficulty: sel.diff,
         human_color: sel.color,
         time_preset: sel.time,
         komi,
-        black_name:
-          mode === "pvp" ? (d.querySelector("#in-black") as HTMLInputElement).value || "黑方" : "黑方",
-        white_name:
-          mode === "pvp" ? (d.querySelector("#in-white") as HTMLInputElement).value || "白方" : "白方",
+        black_name: ib?.value || t("play.default_black"),
+        white_name: iw?.value || t("play.default_white"),
       });
       closeDialog();
       showScreen("play");
     } catch (e) {
-      toast(String(e), true);
+      toast(errText(e), true);
     }
   });
 }
 
 // ── 棋谱库 ──
 async function showRecords(): Promise<void> {
+  panelMode = "records";
   const panel = document.getElementById("menu-panel")!;
-  panel.innerHTML = `<div class="sec"><h3>棋 谱 库</h3><div style="font-size:12px;color:var(--ink-dim)">加载中…</div></div>`;
+  panel.innerHTML = `<div class="sec"><h3>${t("rec.title")}</h3><div style="font-size:12px;color:var(--ink-dim)">${t("rec.loading")}</div></div>`;
   let items: RecordItem[] = [];
   try {
     items = await api<RecordItem[]>("/api/records");
   } catch (e) {
-    toast(String(e), true);
+    toast(errText(e), true);
   }
   const rows = items
     .map(
       (r) => `<tr>
         <td>${r.date}</td><td>${r.black}</td><td>${r.white}</td>
-        <td class="result-tag">${r.result || "?"}</td><td>${r.moves} 手</td>
-        <td><button class="btn primary" data-f="${r.file}">复 盘</button></td>
+        <td class="result-tag">${r.result || "?"}</td><td>${t("rec.moves_n", { n: r.moves })}</td>
+        <td><button class="btn primary" data-f="${r.file}">${t("rec.review")}</button></td>
       </tr>`,
     )
     .join("");
   panel.innerHTML = `
-    <div class="sec"><h3>棋 谱 库</h3>
+    <div class="sec"><h3>${t("rec.title")}</h3>
       ${items.length ? `<table class="records">
-        <tr><th>日期</th><th>黑方</th><th>白方</th><th>结果</th><th>手数</th><th></th></tr>
-        ${rows}</table>` : `<div style="font-size:12.5px;color:var(--ink-dim);padding:8px 0">还没有棋谱——先完成一局吧。对局结束后会自动保存到这里。</div>`}
+        <tr><th>${t("rec.date")}</th><th>${t("rec.black")}</th><th>${t("rec.white")}</th><th>${t("rec.result")}</th><th>${t("rec.moves")}</th><th></th></tr>
+        ${rows}</table>` : `<div style="font-size:12.5px;color:var(--ink-dim);padding:8px 0">${t("rec.empty")}</div>`}
     </div>`;
   panel.querySelectorAll<HTMLButtonElement>("button[data-f]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -204,36 +229,39 @@ async function showRecords(): Promise<void> {
 // ── 引擎下载 ──
 function showDownload(): void {
   const es = engineStatus;
-  const items = [
-    { id: "strong-model", label: "强网络 b18c384nbt（94MB）", desc: "三档难度与 AI 推荐共用" },
-    { id: "opencl-exe", label: "GPU 引擎 OpenCL（6MB）", desc: "NVIDIA/AMD 显卡加速，推荐" },
-    { id: "eigen-exe", label: "CPU 引擎 Eigen（6MB）", desc: "无显卡环境备用" },
-  ].filter((x) => !(es?.installed ?? {})[x.id]);
+  const all: { id: string; labelKey: MsgKey; descKey: MsgKey }[] = [
+    { id: "strong-model", labelKey: "dl.strong_model", descKey: "dl.model_desc" },
+    { id: "opencl-exe", labelKey: "dl.opencl", descKey: "dl.opencl_desc" },
+    { id: "eigen-exe", labelKey: "dl.eigen", descKey: "dl.eigen_desc" },
+  ];
+  const items = all.filter((x) => !(es?.installed ?? {})[x.id]);
   const d = showDialog(`
-    <h2>引擎下载</h2>
+    <h2>${t("dl.title")}</h2>
     <div class="body">
-      下载来自 KataGo 官方发布页与 katagotraining.org，一次下载永久保存在本地。
-      ${items.map((x) => `<div class="dl-row" data-id="${x.id}">
-        <div class="label"><span><b>${x.label}</b><br><small style="color:var(--ink-dim)">${x.desc}</small></span><span class="pct-label"></span></div>
+      ${t("dl.desc")}
+      ${items.map(
+        (x) => `<div class="dl-row" data-id="${x.id}">
+        <div class="label"><span><b>${t(x.labelKey)}</b><br><small style="color:var(--ink-dim)">${t(x.descKey)}</small></span><span class="pct-label"></span></div>
         <div class="progress"><i></i></div>
-      </div>`).join("")}
+      </div>`,
+      ).join("")}
     </div>
     <div class="actions">
-      <button class="btn" id="dlg-cancel">关闭</button>
-      <button class="btn primary" id="dlg-dl">下载全部（${items.length} 项）</button>
+      <button class="btn" id="dlg-cancel">${t("dl.close")}</button>
+      <button class="btn primary" id="dlg-dl">${t("dl.download_all", { n: items.length })}</button>
     </div>`);
   d.querySelector("#dlg-cancel")!.addEventListener("click", closeDialog);
   d.querySelector("#dlg-dl")!.addEventListener("click", async () => {
     try {
       await api("/api/engines/download", { ids: items.map((x) => x.id) });
-      toast("开始下载…");
+      toast(t("dl.started"));
     } catch (e) {
-      toast(String(e), true);
+      toast(errText(e), true);
     }
   });
 }
 
-// WS 下载进度 → 更新弹层内对应行
+// WS 下载进度 → 更新弹层内对应行（模块顶层注册一次）
 onWs((ev) => {
   if (ev.type !== "download") return;
   const row = document.querySelector(`.dl-row[data-id="${ev.id}"]`);
@@ -243,15 +271,15 @@ onWs((ev) => {
   if (ev.phase === "downloading") {
     bar.style.width = `${ev.pct ?? 0}%`;
     const mbps = Math.round(((ev.speed_kbps as number) ?? 0) / 1024);
-    pctLabel.textContent = `${ev.pct ?? 0}% · ${mbps}MB/s`;
+    pctLabel.textContent = t("dl.progress", { pct: ev.pct ?? 0, mbps });
   } else if (ev.phase === "extracting") {
     bar.style.width = "100%";
-    pctLabel.textContent = "解压中…";
+    pctLabel.textContent = t("dl.extracting");
   } else if (ev.phase === "done") {
     bar.style.width = "100%";
-    pctLabel.textContent = "✓ 完成";
+    pctLabel.textContent = t("dl.done");
   } else if (ev.phase === "error") {
-    pctLabel.textContent = "失败";
-    toast(`下载失败：${ev.error}`, true);
+    pctLabel.textContent = t("dl.failed");
+    if (ev.error) toast(errPayloadText(ev.error), true);
   }
 });

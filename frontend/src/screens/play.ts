@@ -3,6 +3,8 @@
 import { api } from "../api";
 import { GoBoard } from "../board";
 import { sfx } from "../audio";
+import { errPayloadText, errText, t } from "../i18n";
+import type { MsgKey } from "../i18n";
 import type { GameState, HintData, TerritoryData, WsEvent } from "../types";
 import { closeDialog, coordName, fmtClock, showDialog, showScreen, toast } from "../main";
 
@@ -17,6 +19,12 @@ let terrMoveCount = -1;
 let els: Record<string, HTMLElement> = {};
 let winrateHist: { n: number; wr: number }[] = [];
 
+const DIFF_KEY: Record<string, MsgKey> = {
+  easy: "diff.easy",
+  medium: "diff.medium",
+  hard: "diff.hard",
+};
+
 export function initPlay(): void {
   const root = document.getElementById("screen-play")!;
   root.innerHTML = `
@@ -24,14 +32,14 @@ export function initPlay(): void {
     <aside class="panel left">
       <div class="player-card" id="pc-b">
         <div class="row"><span class="stone-ico b"></span>
-          <div><div class="p-name" id="name-b">黑方</div><div class="p-tag" id="tag-b"></div></div></div>
-        <div class="meta"><span class="cap-num">提子 <b id="cap-b">0</b></span><span class="byo-chip" id="byo-b" style="display:none">读秒 ×3</span></div>
+          <div><div class="p-name" id="name-b">${t("play.default_black")}</div><div class="p-tag" id="tag-b"></div></div></div>
+        <div class="meta"><span class="cap-num">${t("play.captures")} <b id="cap-b">0</b></span><span class="byo-chip" id="byo-b" style="display:none"></span></div>
         <div class="clock" id="clock-b">30:00</div>
       </div>
       <div class="player-card" id="pc-w">
         <div class="row"><span class="stone-ico w"></span>
-          <div><div class="p-name" id="name-w">白方</div><div class="p-tag" id="tag-w"></div></div></div>
-        <div class="meta"><span class="cap-num">提子 <b id="cap-w">0</b></span><span class="byo-chip" id="byo-w" style="display:none"></span></div>
+          <div><div class="p-name" id="name-w">${t("play.default_white")}</div><div class="p-tag" id="tag-w"></div></div></div>
+        <div class="meta"><span class="cap-num">${t("play.captures")} <b id="cap-w">0</b></span><span class="byo-chip" id="byo-w" style="display:none"></span></div>
         <div class="clock" id="clock-w">30:00</div>
       </div>
       <div class="rules-note" id="rules-note"></div>
@@ -39,30 +47,30 @@ export function initPlay(): void {
     <section class="board-wrap"><div class="board-frame"><canvas id="play-canvas"></canvas></div></section>
     <aside class="panel right">
       <div class="sec" style="flex:1;display:flex;flex-direction:column;min-height:0">
-        <h3>手 数</h3>
+        <h3>${t("play.moves")}</h3>
         <div class="movelist" id="movelist"></div>
       </div>
       <div class="sec">
-        <h3>局 势</h3>
+        <h3>${t("play.trend")}</h3>
         <div class="own-canvas-wrap"><canvas id="wr-cv" width="536" height="192"></canvas></div>
-        <div class="wr-now"><span>黑 <b id="wr-b">50%</b></span><span id="wr-lead">均势</span><span>白 <b id="wr-w">50%</b></span></div>
+        <div class="wr-now"><span>${t("stone.black")} <b id="wr-b">50%</b></span><span id="wr-lead">${t("play.balanced")}</span><span>${t("stone.white")} <b id="wr-w">50%</b></span></div>
         <div class="wr-bar"><i id="wr-fill" style="width:50%"></i></div>
       </div>
       <div class="sec" id="hint-sec">
-        <h3>A I 推 荐</h3>
-        <div class="hint-box" id="hint-box"><span class="pct">—</span><div id="hint-text">开启下方按钮后显示</div></div>
+        <h3>${t("play.hint_title")}</h3>
+        <div class="hint-box" id="hint-box"><span class="pct">—</span><div id="hint-text">${t("play.hint_off")}</div></div>
       </div>
     </aside>
   </main>
   <footer class="controls">
-    <button class="btn" id="btn-undo">悔 棋<span class="kbd">Ctrl+Z</span></button>
-    <button class="btn" id="btn-pass">停 一 手</button>
-    <button class="btn danger" id="btn-resign">认 输</button>
+    <button class="btn" id="btn-undo">${t("play.undo")}<span class="kbd">Ctrl+Z</span></button>
+    <button class="btn" id="btn-pass">${t("play.pass")}</button>
+    <button class="btn danger" id="btn-resign">${t("play.resign")}</button>
     <div class="divider"></div>
-    <button class="btn toggle" id="btn-hint">💡 AI 推荐</button>
-    <button class="btn toggle" id="btn-terr">⚖ 形势判断</button>
+    <button class="btn toggle" id="btn-hint">${t("play.hint_toggle")}</button>
+    <button class="btn toggle" id="btn-terr">${t("play.terr_toggle")}</button>
     <div class="divider"></div>
-    <button class="btn" id="btn-menu">主菜单</button>
+    <button class="btn" id="btn-menu">${t("play.menu")}</button>
   </footer>`;
 
   board = new GoBoard(document.getElementById("play-canvas") as HTMLCanvasElement, {
@@ -71,7 +79,7 @@ export function initPlay(): void {
       try {
         await api("/api/game/move", { point: p });
       } catch (e) {
-        toast(String(e), true);
+        toast(errText(e), true);
       }
     },
     onToggleDead: async (p) => {
@@ -91,7 +99,7 @@ export function initPlay(): void {
         board.setDeadStones(cur);
         renderScoringDialog();
       } catch (e) {
-        toast(String(e), true);
+        toast(errText(e), true);
       }
     },
   });
@@ -114,27 +122,32 @@ export function initPlay(): void {
   $("btn-pass").addEventListener("click", doPass);
   $("btn-resign").addEventListener("click", doResign);
   $("btn-menu").addEventListener("click", () => showScreen("menu"));
-  $("btn-hint").addEventListener("click", () => {
+  const btnHint = $("btn-hint");
+  const btnTerr = $("btn-terr");
+  btnHint.classList.toggle("on", hintOn);
+  btnTerr.classList.toggle("on", terrOn);
+  btnHint.addEventListener("click", () => {
     hintOn = !hintOn;
-    $("btn-hint").classList.toggle("on", hintOn);
+    btnHint.classList.toggle("on", hintOn);
     if (hintOn) void fetchHint();
     else board.setHints(null);
   });
-  $("btn-terr").addEventListener("click", () => {
+  btnTerr.addEventListener("click", () => {
     terrOn = !terrOn;
-    $("btn-terr").classList.toggle("on", terrOn);
+    btnTerr.classList.toggle("on", terrOn);
     if (terrOn) void fetchTerritory();
     else board.setTerritory(null);
   });
-
-  document.addEventListener("keydown", (e) => {
-    if (!document.getElementById("screen-play")!.classList.contains("active")) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
-      e.preventDefault();
-      void doUndo();
-    }
-  });
 }
+
+// document 级监听只挂一次（initPlay 可重复调用于语言切换重建）
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("screen-play")?.classList.contains("active")) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    void doUndo();
+  }
+});
 
 export function activatePlay(): void {
   if (state) applyState(state, true);
@@ -143,36 +156,44 @@ export function deactivatePlay(): void {
   /* 暂无需要 */
 }
 
+/** 语言切换后按当前状态与语言重渲染（棋盘/曲线/覆盖层全部恢复）。 */
+export function reapplyPlay(): void {
+  hintMoveCount = -1;
+  terrMoveCount = -1;
+  if (state) applyState(state, true);
+  drawWinrateCurve();
+}
+
 // ── 操作 ──
 async function doUndo(): Promise<void> {
   try {
     const r = await api<{ ok: boolean; undid: number }>("/api/game/undo", {});
-    if (!r.ok) toast("无可悔之棋");
+    if (!r.ok) toast(t("play.no_undo"));
     hintMoveCount = -1;
     terrMoveCount = -1;
     board.setHints(null);
     board.setTerritory(null);
   } catch (e) {
-    toast(String(e), true);
+    toast(errText(e), true);
   }
 }
 
 async function doPass(): Promise<void> {
   try {
     await api("/api/game/pass", {});
-    toast("停一手");
+    toast(t("play.passed"));
   } catch (e) {
-    toast(String(e), true);
+    toast(errText(e), true);
   }
 }
 
 async function doResign(): Promise<void> {
   if (!state || state.status === "ended") return;
   const d = showDialog(`
-    <h2>认输确认</h2>
-    <div class="body">确定中盘认输吗？认输后对局结束并保存棋谱。</div>
-    <div class="actions"><button class="btn" id="dlg-cancel">再想想</button>
-    <button class="btn primary" id="dlg-yes">认 输</button></div>`);
+    <h2>${t("play.resign_title")}</h2>
+    <div class="body">${t("play.resign_body")}</div>
+    <div class="actions"><button class="btn" id="dlg-cancel">${t("play.resign_cancel")}</button>
+    <button class="btn primary" id="dlg-yes">${t("play.resign_ok")}</button></div>`);
   d.querySelector("#dlg-cancel")!.addEventListener("click", closeDialog);
   d.querySelector("#dlg-yes")!.addEventListener("click", async () => {
     closeDialog();
@@ -180,7 +201,7 @@ async function doResign(): Promise<void> {
       const myColor = state!.mode === "ai" ? state!.human_color : state!.to_play;
       await api("/api/game/resign", { color: myColor });
     } catch (e) {
-      toast(String(e), true);
+      toast(errText(e), true);
     }
   });
 }
@@ -195,7 +216,7 @@ function isHumanTurn(): boolean {
 function clearHints(): void {
   hintMoveCount = -1;
   board.setHints(null);
-  els.hintText.innerHTML = "等待您行棋时显示";
+  els.hintText.innerHTML = t("play.hint_wait");
   const pct = els.hintText.parentElement!.querySelector(".pct");
   if (pct) pct.textContent = "—";
 }
@@ -210,25 +231,29 @@ async function fetchHint(): Promise<void> {
     board.setHints(h.moves);
     if (h.moves.length) {
       const m = h.moves[0];
-      els.hintText.innerHTML = `<b>${coordName(m.point, state.size)}</b> · 胜率 ${(m.winrate_black * 100).toFixed(1)}%<small>由最高棋力引擎实时计算</small>`;
-      els.hintText.parentElement!.querySelector(".pct")!.textContent = `${coordName(m.point, state.size)}`;
+      const coord = coordName(m.point, state.size);
+      els.hintText.innerHTML = t("play.hint_item", {
+        coord,
+        p: (m.winrate_black * 100).toFixed(1),
+      });
+      els.hintText.parentElement!.querySelector(".pct")!.textContent = coord;
     }
     updateWinrate(h.winrate_black, h.score_lead_black);
   } catch (e) {
-    toast(String(e), true);
+    toast(errText(e), true);
   }
 }
 
 async function fetchTerritory(): Promise<void> {
   if (!state || state.status !== "playing") return;
   try {
-    const t = await api<TerritoryData>("/api/game/territory");
-    if (!terrOn || t.move_count !== state.moves.length) return;
-    terrMoveCount = t.move_count;
-    board.setTerritory(t.ownership);
-    updateWinrate(t.winrate_black, t.score_lead_black);
+    const t0 = await api<TerritoryData>("/api/game/territory");
+    if (!terrOn || t0.move_count !== state.moves.length) return;
+    terrMoveCount = t0.move_count;
+    board.setTerritory(t0.ownership);
+    updateWinrate(t0.winrate_black, t0.score_lead_black);
   } catch (e) {
-    toast(String(e), true);
+    toast(errText(e), true);
   }
 }
 
@@ -238,7 +263,11 @@ function updateWinrate(wrBlack: number, lead: number): void {
   els.wrW.textContent = `${(100 - pct).toFixed(1)}%`;
   els.wrFill.style.width = `${pct}%`;
   els.wrLead.textContent =
-    Math.abs(lead) < 1 ? "均势" : lead > 0 ? `黑优 ${lead.toFixed(1)} 目` : `白优 ${(-lead).toFixed(1)} 目`;
+    Math.abs(lead) < 1
+      ? t("play.balanced")
+      : lead > 0
+        ? t("play.black_lead", { x: lead.toFixed(1) })
+        : t("play.white_lead", { x: (-lead).toFixed(1) });
   // 每个手数只保留一个点：替换同手数记录，丢弃悔棋后多余的更高手数
   const n = state?.moves.length ?? 0;
   winrateHist = winrateHist.filter((p) => p.n < n);
@@ -249,6 +278,7 @@ function updateWinrate(wrBlack: number, lead: number): void {
 // ── 胜率迷你曲线 ──
 function drawWinrateCurve(): void {
   const cv = document.getElementById("wr-cv") as HTMLCanvasElement;
+  if (!cv) return;
   const g = cv.getContext("2d")!;
   const W = cv.width, H = cv.height, mid = H / 2;
   g.clearRect(0, 0, W, H);
@@ -262,7 +292,7 @@ function drawWinrateCurve(): void {
   if (winrateHist.length < 2) {
     g.font = "600 22px Consolas,monospace";
     g.fillStyle = "rgba(233,221,196,.5)";
-    g.fillText("黑", 14, 26); g.fillText("白", 14, H - 12);
+    g.fillText(t("stone.black"), 14, 26); g.fillText(t("stone.white"), 14, H - 12);
     return;
   }
   const px = (i: number) => 8 + (i * (W - 16)) / (winrateHist.length - 1);
@@ -280,7 +310,7 @@ function drawWinrateCurve(): void {
   g.fill();
   g.font = "600 22px Consolas,monospace";
   g.fillStyle = "rgba(233,221,196,.6)";
-  g.fillText("黑", 14, 26); g.fillText("白", 14, H - 12);
+  g.fillText(t("stone.black"), 14, 26); g.fillText(t("stone.white"), 14, H - 12);
 }
 
 // ── 状态应用 ──
@@ -327,19 +357,22 @@ function applyState(s: GameState, force = false): void {
   // 左侧卡片
   els["name-b"].textContent = s.names.black;
   els["name-w"].textContent = s.names.white;
-  els["tag-b"].textContent = s.mode === "ai" && s.human_color === BLACK ? "您 · 先手" : "先手";
-  els["tag-w"].textContent = s.mode === "ai" && s.human_color === 2 ? "您" : "";
+  els["tag-b"].textContent = s.mode === "ai" && s.human_color === BLACK ? t("play.you_first") : t("play.first");
+  els["tag-w"].textContent = s.mode === "ai" && s.human_color === 2 ? t("play.you") : "";
   els["cap-b"].textContent = String(s.captures.black);
   els["cap-w"].textContent = String(s.captures.white);
   updateClocks(s.clocks);
 
   // 顶栏角标
-  const diff = { easy: "简单", medium: "中等", hard: "困难" }[s.difficulty] ?? s.difficulty;
+  const diff = t(DIFF_KEY[s.difficulty] ?? "diff.medium");
   els.chip.style.display = "";
   els.chip.textContent =
     s.mode === "ai"
-      ? `人机对局 · ${diff} · ${s.human_color === BLACK ? "执黑" : "执白"}`
-      : "双人对弈";
+      ? t("play.chip_ai", {
+          diff,
+          color: t(s.human_color === BLACK ? "common.black_stone" : "common.white_stone"),
+        })
+      : t("play.chip_pvp");
 
   // 手数列表
   const list = els.movelist;
@@ -349,10 +382,10 @@ function applyState(s: GameState, force = false): void {
     const row = document.createElement("div");
     row.className = "mv-row";
     const b = s.moves[i];
-    let html = `<span><i class="n">${b.n}.</i><b class="b">● ${b.point == null ? "停" : coordName(b.point, LETN)}</b></span>`;
+    let html = `<span><i class="n">${b.n}.</i><b class="b">● ${b.point == null ? t("play.pass_mark") : coordName(b.point, LETN)}</b></span>`;
     if (s.moves[i + 1]) {
       const w = s.moves[i + 1];
-      html += `<span><i class="n">${w.n}.</i><b class="w">○ ${w.point == null ? "停" : coordName(w.point, LETN)}</b></span>`;
+      html += `<span><i class="n">${w.n}.</i><b class="w">○ ${w.point == null ? t("play.pass_mark") : coordName(w.point, LETN)}</b></span>`;
     }
     row.innerHTML = html;
     list.appendChild(row);
@@ -360,10 +393,16 @@ function applyState(s: GameState, force = false): void {
   list.scrollTop = list.scrollHeight;
 
   // 用时说明
-  const t = s.time;
-  els.rules.innerHTML = t.main
-    ? `<b>用时规则</b><br>主用时 ${fmtClock(t.main, false)}，耗尽后进入<br>${t.byo}s 读秒 ×${t.periods}，用尽判负。<br>中国规则 · 贴 ${s.komi} 目 · 第 <b>${s.moves.length + 1}</b> 手`
-    : `<b>不限时</b><br>中国规则 · 贴 ${s.komi} 目<br>第 <b>${s.moves.length + 1}</b> 手`;
+  const tm = s.time;
+  els.rules.innerHTML = tm.main
+    ? `<b>${t("play.rules_title")}</b><br>${t("play.rules_timed", {
+        main: fmtClock(tm.main, false),
+        byo: tm.byo,
+        periods: tm.periods,
+      })}<br>${t("play.rules_komi_move", { komi: s.komi, n: s.moves.length + 1 })}`
+    : `<b>${t("play.rules_free")}</b><br>${t("play.rules_komi", {
+        komi: s.komi,
+      })}<br>${t("play.rules_move", { n: s.moves.length + 1 })}`;
 
   // 按钮状态
   setBtn("btn-undo", s.status === "playing" || s.status === "scoring");
@@ -391,7 +430,7 @@ function applyState(s: GameState, force = false): void {
 
   // 点目 / 结果流程
   if (s.status === "scoring") showScoringDialog();
-  else closeDialog();
+  else if (!s.result) closeDialog();
   if (s.status === "ended" && s.result) showResultDialog(s);
 }
 
@@ -410,7 +449,7 @@ function updateClocks(clocks: Record<string, { display: number; in_byo: boolean;
       byoEl.style.display = "none";
     } else if (view.in_byo) {
       byoEl.style.display = "";
-      byoEl.textContent = `读秒 ×${view.byo_periods}`;
+      byoEl.textContent = t("play.byo_n", { n: view.byo_periods });
     } else {
       byoEl.style.display = "none";
     }
@@ -422,39 +461,52 @@ function updateClocks(clocks: Record<string, { display: number; in_byo: boolean;
     if (state.ai_thinking && state.ai_color === 2) {
       think.style.display = "";
       think.className = "byo-chip think";
-      think.textContent = "思考中…";
+      think.textContent = t("play.thinking");
     } else if (state.ai_thinking && state.ai_color === BLACK) {
       const tb = els["byo-b"];
       tb.style.display = "";
       tb.className = "byo-chip think";
-      tb.textContent = "思考中…";
+      tb.textContent = t("play.thinking");
     }
   }
+}
+
+/** 点目/终局结果文案（由 winner/margin/子数组合，语言相关）。 */
+function scoreText(winner: number, margin: number, b: number, w: number): string {
+  return !winner
+    ? t("play.draw_text")
+    : t("play.score_text", {
+        who: t(winner === BLACK ? "stone.black" : "stone.white"),
+        margin,
+        b,
+        w,
+      });
 }
 
 // ── 点目弹层 ──
 function showScoringDialog(): void {
   if (!state?.score_preview) return;
+  const sp = state.score_preview;
   const d = showDialog(`
-    <h2>终局点目</h2>
+    <h2>${t("play.score_title")}</h2>
     <div class="body">
-      双方连续停一手，进入点目。<b>点击棋盘上的死子</b>可手动调整死活（已自动用 AI 判定）。
+      ${t("play.score_desc")}
       <div class="score-line">
-        <span>黑 <b>${state.score_preview.black_area}</b> 子</span>
-        <span style="color:var(--gold-soft)">${state.score_preview.text}</span>
-        <span>白 <b>${state.score_preview.white_area}</b> 子（含贴目）</span>
+        <span>${t("play.black_area", { b: sp.black_area })}</span>
+        <span style="color:var(--gold-soft)">${scoreText(sp.winner, sp.margin, sp.black_area, sp.white_area)}</span>
+        <span>${t("play.white_area", { w: sp.white_area })}</span>
       </div>
     </div>
     <div class="actions">
-      <button class="btn" id="dlg-continue">继续下（撤销停一手）</button>
-      <button class="btn primary" id="dlg-confirm">确认结果</button>
+      <button class="btn" id="dlg-continue">${t("play.score_resume")}</button>
+      <button class="btn primary" id="dlg-confirm">${t("play.score_confirm")}</button>
     </div>`);
   d.querySelector("#dlg-confirm")!.addEventListener("click", async () => {
     closeDialog();
     try {
       await api("/api/game/confirm-score", {});
     } catch (e) {
-      toast(String(e), true);
+      toast(errText(e), true);
     }
   });
   d.querySelector("#dlg-continue")!.addEventListener("click", async () => {
@@ -470,17 +522,31 @@ function renderScoringDialog(): void {
 // ── 结果弹层 ──
 function showResultDialog(s: GameState): void {
   const r = s.result!;
-  const who = r.winner == null ? "和棋" : r.winner === BLACK ? "黑方胜" : "白方胜";
+  const who = r.winner == null ? t("play.draw") : r.winner === BLACK ? t("play.black_win") : t("play.white_win");
+  let line: string;
+  if (r.reason === "timeout") {
+    line = t("play.reason_timeout");
+  } else if (r.reason === "resign") {
+    const loser = 3 - (r.winner ?? 1); // 认输方
+    line = t("play.reason_resign", {
+      who: t(loser === BLACK ? "play.default_black" : "play.default_white"),
+    });
+  } else {
+    const sp = s.score_preview;
+    line = sp
+      ? scoreText(r.winner ?? 0, r.margin, sp.black_area, sp.white_area)
+      : t("play.draw_text");
+  }
   const d = showDialog(`
-    <h2>对局结束</h2>
+    <h2>${t("play.result_title")}</h2>
     <div class="body" style="text-align:center">
       <div style="font-family:var(--kai);font-size:44px;color:var(--gold);margin:8px 0">${who}</div>
-      <div>${r.detail}</div>
-      <div style="color:var(--ink-dim);font-size:12px;margin-top:10px">棋谱已自动保存，可到棋谱库复盘</div>
+      <div>${line}</div>
+      <div style="color:var(--ink-dim);font-size:12px;margin-top:10px">${t("play.saved_note")}</div>
     </div>
     <div class="actions">
-      <button class="btn" id="dlg-close">留在此页</button>
-      <button class="btn" id="dlg-menu2">回主菜单</button>
+      <button class="btn" id="dlg-close">${t("play.stay")}</button>
+      <button class="btn" id="dlg-menu2">${t("play.back_menu")}</button>
     </div>`);
   d.querySelector("#dlg-close")!.addEventListener("click", closeDialog);
   d.querySelector("#dlg-menu2")!.addEventListener("click", () => {
@@ -503,10 +569,10 @@ export function onGameEvent(ev: WsEvent): void {
       }
       break;
     case "saved":
-      toast(`棋谱已保存：${ev.path}`);
+      toast(t("play.saved_toast", { path: ev.path }));
       break;
     case "error":
-      toast(ev.message, true);
+      toast(errPayloadText(ev.error), true);
       break;
     default:
       break;

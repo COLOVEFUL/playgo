@@ -60,6 +60,8 @@ header .spacer { flex: 1; }
   display: flex; align-items: center; justify-content: center; margin-left: 8px; transition: 0.18s;
 }
 .icon-btn:hover { background: rgba(201, 162, 39, 0.1); color: var(--gold-soft); border-color: var(--panel-edge); }
+/* 语言切换浮于弹层遮罩(.overlay z-index 50)之上：弹窗打开时仍可切换 */
+#nav-lang { position: relative; z-index: 60; background: rgba(20, 15, 9, 0.9); }
 
 /* ── 面板通用 ── */
 .panel {

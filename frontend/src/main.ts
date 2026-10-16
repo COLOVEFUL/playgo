@@ -1,20 +1,25 @@
-/** 入口：页面骨架、简单路由、共享 UI 工具。 */
+/** 入口：页面骨架、简单路由、共享 UI 工具、语言切换编排。 */
 
 import "./style.css";
 import { api, connectWs, onWs } from "./api";
+import { initLang, lang, onLangChange, setLang, t } from "./i18n";
 import type { EngineStatus, WsEvent } from "./types";
 import { initMenu, refreshMenu } from "./screens/menu";
-import { initPlay, activatePlay, deactivatePlay, onGameEvent } from "./screens/play";
-import { initReview, activateReview } from "./screens/review";
+import { initPlay, activatePlay, deactivatePlay, onGameEvent, reapplyPlay } from "./screens/play";
+import { initReview, activateReview, reapplyReview } from "./screens/review";
+
+// 语言须在首次渲染前就位（跟随浏览器 / localStorage）
+initLang();
 
 // ── 骨架 ──
 const app = document.getElementById("app")!;
 app.innerHTML = `
   <header>
-    <div class="logo" id="nav-home"><span class="badge">弈</span><span class="name">PLAYGO</span><span class="sub">本地围棋对弈</span></div>
+    <div class="logo" id="nav-home"><span class="badge">弈</span><span class="name">PLAYGO</span><span class="sub">${t("app.tagline")}</span></div>
     <div class="spacer"></div>
     <span class="mode-chip" id="top-chip" style="display:none"></span>
-    <button class="icon-btn" id="nav-records" title="棋谱库">📖</button>
+    <button class="icon-btn" id="nav-lang" title="${t("app.lang_tip")}">EN</button>
+    <button class="icon-btn" id="nav-records" title="${t("app.records_tip")}">📖</button>
   </header>
   <section class="screen" id="screen-menu"></section>
   <section class="screen" id="screen-play"></section>
@@ -22,6 +27,15 @@ app.innerHTML = `
   <div class="overlay" id="overlay"><div class="dialog" id="dialog"></div></div>
   <div id="toast"></div>
 `;
+
+/** 顶栏文案按当前语言刷新（语言切换时只改文本，不重建、监听器不丢）。 */
+function updateHeader(): void {
+  document.querySelector("#nav-home .sub")!.textContent = t("app.tagline");
+  const langBtn = document.getElementById("nav-lang")!;
+  langBtn.textContent = lang() === "zh" ? "EN" : "中";
+  langBtn.title = t("app.lang_tip");
+  document.getElementById("nav-records")!.title = t("app.records_tip");
+}
 
 // ── 共享工具 ──
 let toastTimer = 0;
@@ -69,11 +83,26 @@ export function coordName(point: number, size = 19): string {
 // ── 路由 ──
 document.getElementById("nav-home")!.addEventListener("click", () => {
   showScreen("menu");
-  refreshMenu();
+  refreshMenu("engine");
 });
 document.getElementById("nav-records")!.addEventListener("click", () => {
   showScreen("menu");
   refreshMenu("records");
+});
+document.getElementById("nav-lang")!.addEventListener("click", () => {
+  setLang(lang() === "zh" ? "en" : "zh");
+});
+
+// 语言切换：重建三屏并重放当前状态（棋局在后端，曲线历史等模块内保留）
+onLangChange(() => {
+  updateHeader();
+  closeDialog();
+  initMenu();
+  initPlay();
+  initReview();
+  void refreshMenu();
+  reapplyPlay();
+  reapplyReview();
 });
 
 // ── 引擎状态（顶栏角标 + 全局事件） ──
@@ -97,6 +126,7 @@ void api<EngineStatus>("/api/engines/status").then((s) => {
   engineStatus = s;
 });
 
+updateHeader();
 initMenu();
 initPlay();
 initReview();

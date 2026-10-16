@@ -2,6 +2,8 @@
 
 import { api, onWs } from "../api";
 import { GoBoard } from "../board";
+import { errPayloadText, errText, t } from "../i18n";
+import type { MsgKey } from "../i18n";
 import type { RecordDetail, ReviewAnalysis, WsEvent } from "../types";
 import { coordName, showScreen, toast } from "../main";
 
@@ -11,6 +13,7 @@ let board: GoBoard;
 let detail: RecordDetail | null = null;
 let curIdx = 0; // 当前展示到第几手（0=空盘）
 let analysis: ReviewAnalysis | null = null;
+let terrToggle = false;
 
 export function initReview(): void {
   const root = document.getElementById("screen-review")!;
@@ -18,38 +21,38 @@ export function initReview(): void {
   <main class="play-main">
     <aside class="panel left" style="padding:14px;gap:12px">
       <div class="player-card">
-        <div class="row"><span class="stone-ico b"></span><div><div class="p-name" id="rv-black">黑方</div></div></div>
+        <div class="row"><span class="stone-ico b"></span><div><div class="p-name" id="rv-black"></div></div></div>
       </div>
       <div class="player-card">
-        <div class="row"><span class="stone-ico w"></span><div><div class="p-name" id="rv-white">白方</div></div></div>
+        <div class="row"><span class="stone-ico w"></span><div><div class="p-name" id="rv-white"></div></div></div>
       </div>
       <div class="rules-note" id="rv-meta"></div>
     </aside>
     <section class="board-wrap"><div class="board-frame"><canvas id="rv-canvas"></canvas></div></section>
     <aside class="panel right">
       <div class="sec">
-        <h3>胜 率 曲 线</h3>
+        <h3>${t("rv.curve_title")}</h3>
         <div class="own-canvas-wrap"><canvas id="rv-curve" width="536" height="300"></canvas></div>
-        <div class="wr-now"><span>黑优</span><span id="rv-curve-hint">点击曲线跳转 · 点击曲线查看每手</span><span>白优</span></div>
+        <div class="wr-now"><span>${t("rv.black_lead")}</span><span id="rv-curve-hint">${t("rv.curve_tip")}</span><span>${t("rv.white_lead")}</span></div>
       </div>
       <div class="sec" style="flex:1;overflow-y:auto">
-        <h3>本 手 分 析</h3>
+        <h3>${t("rv.analysis_title")}</h3>
         <div id="rv-moveinfo" style="font-size:13px;line-height:2.1">—</div>
       </div>
     </aside>
   </main>
   <footer class="review-bar">
-    <button class="nav-btn" id="rv-home" title="回到空盘">⏮</button>
-    <button class="nav-btn" id="rv-prev" title="上一手（←）">◀</button>
+    <button class="nav-btn" id="rv-home" title="${t("rv.first")}">⏮</button>
+    <button class="nav-btn" id="rv-prev" title="${t("rv.prev")}">◀</button>
     <div class="move-label" id="rv-label">0 / 0</div>
-    <button class="nav-btn" id="rv-next" title="下一手（→）">▶</button>
-    <button class="nav-btn" id="rv-end" title="跳到最后">⏭</button>
+    <button class="nav-btn" id="rv-next" title="${t("rv.next")}">▶</button>
+    <button class="nav-btn" id="rv-end" title="${t("rv.last")}">⏭</button>
     <input type="range" class="move-slider" id="rv-slider" min="0" max="0" value="0">
     <div class="divider"></div>
-    <button class="btn toggle" id="rv-terr">⚖ 形势</button>
-    <button class="btn primary" id="rv-analyze">AI 深度复盘</button>
+    <button class="btn toggle" id="rv-terr">${t("rv.terr")}</button>
+    <button class="btn primary" id="rv-analyze">${t("rv.analyze")}</button>
     <div class="divider"></div>
-    <button class="btn" id="rv-back">主菜单</button>
+    <button class="btn" id="rv-back">${t("rv.menu")}</button>
   </footer>`;
 
   board = new GoBoard(document.getElementById("rv-canvas") as HTMLCanvasElement, {});
@@ -63,24 +66,21 @@ export function initReview(): void {
   $("rv-end").addEventListener("click", () => goto(detail?.moves.length ?? 0));
   $("rv-slider").addEventListener("input", (e) => goto(Number((e.target as HTMLInputElement).value)));
   $("rv-back").addEventListener("click", () => showScreen("menu"));
-  $("rv-terr").addEventListener("click", () => {
-    $("rv-terr").classList.toggle("on");
+  const terrBtn = $("rv-terr");
+  terrBtn.classList.toggle("on", terrToggle);
+  terrBtn.addEventListener("click", () => {
+    terrToggle = !terrToggle;
+    terrBtn.classList.toggle("on", terrToggle);
     render();
   });
   $("rv-analyze").addEventListener("click", async () => {
     if (!detail) return;
     try {
       await api("/api/review/analyze", { file: detail.file });
-      toast("复盘分析已开始，完成后自动展示");
+      toast(t("rv.started"));
     } catch (e) {
-      toast(String(e), true);
+      toast(errText(e), true);
     }
-  });
-
-  document.addEventListener("keydown", (e) => {
-    if (!document.getElementById("screen-review")!.classList.contains("active")) return;
-    if (e.key === "ArrowLeft") goto(curIdx - 1);
-    if (e.key === "ArrowRight") goto(curIdx + 1);
   });
 
   const curve = $("rv-curve") as HTMLCanvasElement;
@@ -91,24 +91,34 @@ export function initReview(): void {
     goto(Math.max(0, Math.min(detail?.moves.length ?? 0, n)));
   });
 
-  window.addEventListener("open-review", (e) => {
-    void load((e as CustomEvent).detail as string);
-  });
-
-  onWs((ev: WsEvent) => {
-    if (!detail) return;
-    if (ev.type === "review_progress" && ev.file === detail.file) {
-      toast(`复盘分析中 ${ev.done}/${ev.total}`);
-    }
-    if (ev.type === "review_done" && ev.file === detail.file) {
-      toast("复盘分析完成");
-      void reloadAnalysis();
-    }
-    if (ev.type === "review_error" && ev.file === detail.file) {
-      toast(`复盘失败：${ev.error}`, true);
-    }
-  });
+  // 已载入棋谱时恢复显示（首帧或语言切换后）
+  if (detail) reapplyReview();
 }
+
+// document/window/bus 级监听只挂一次（initReview 可重复调用于语言切换重建）
+document.addEventListener("keydown", (e) => {
+  if (!document.getElementById("screen-review")?.classList.contains("active")) return;
+  if (e.key === "ArrowLeft") goto(curIdx - 1);
+  if (e.key === "ArrowRight") goto(curIdx + 1);
+});
+
+window.addEventListener("open-review", (e) => {
+  void load((e as CustomEvent).detail as string);
+});
+
+onWs((ev: WsEvent) => {
+  if (!detail) return;
+  if (ev.type === "review_progress" && ev.file === detail.file) {
+    toast(t("rv.progress", { done: ev.done, total: ev.total }));
+  }
+  if (ev.type === "review_done" && ev.file === detail.file) {
+    toast(t("rv.done"));
+    void reloadAnalysis();
+  }
+  if (ev.type === "review_error" && ev.file === detail.file) {
+    toast(t("rv.failed", { msg: errPayloadText(ev.error) }), true);
+  }
+});
 
 export async function activateReview(): Promise<void> {
   if (!detail) {
@@ -117,19 +127,26 @@ export async function activateReview(): Promise<void> {
   }
 }
 
+/** 语言切换后恢复复盘页显示（名称/meta/游标/曲线）。 */
+export function reapplyReview(): void {
+  if (!detail) return;
+  (document.getElementById("rv-slider") as HTMLInputElement).max = String(detail.moves.length);
+  document.getElementById("rv-black")!.textContent = detail.black;
+  document.getElementById("rv-white")!.textContent = detail.white;
+  document.getElementById("rv-meta")!.innerHTML =
+    `${detail.date}<br>${t("rv.komi", { komi: detail.komi, result: detail.result || "?" })}<br>${t("rv.total_moves", { n: detail.moves.length })}`;
+  goto(curIdx);
+}
+
 async function load(file: string): Promise<void> {
   try {
     detail = await api<RecordDetail>(`/api/records/${encodeURIComponent(file)}`);
     analysis = detail.analysis;
-    (document.getElementById("rv-slider") as HTMLInputElement).max = String(detail.moves.length);
-    document.getElementById("rv-black")!.textContent = detail.black;
-    document.getElementById("rv-white")!.textContent = detail.white;
-    document.getElementById("rv-meta")!.innerHTML =
-      `${detail.date}<br>贴 ${detail.komi} 目 · ${detail.result || "?"}<br>共 ${detail.moves.length} 手`;
+    reapplyReview();
     board.setSize(detail.size);
     goto(0);
   } catch (e) {
-    toast(String(e), true);
+    toast(errText(e), true);
   }
 }
 
@@ -150,13 +167,13 @@ function goto(n: number): void {
 }
 
 /** 评估标签：以行棋方视角的胜率变化 */
-function gradeMove(delta: number): { text: string; color: string } {
-  if (delta >= 0.08) return { text: "神之一手", color: "#e8c860" };
-  if (delta >= 0.03) return { text: "好棋", color: "#9dc98f" };
-  if (delta > -0.03) return { text: "普通", color: "var(--ink-dim)" };
-  if (delta > -0.08) return { text: "缓手", color: "#e8a04c" };
-  if (delta > -0.15) return { text: "恶手", color: "#e07856" };
-  return { text: "败着", color: "#e2543e" };
+function gradeMove(delta: number): { textKey: MsgKey; color: string } {
+  if (delta >= 0.08) return { textKey: "rv.grade_brilliant", color: "#e8c860" };
+  if (delta >= 0.03) return { textKey: "rv.grade_good", color: "#9dc98f" };
+  if (delta > -0.03) return { textKey: "rv.grade_plain", color: "var(--ink-dim)" };
+  if (delta > -0.08) return { textKey: "rv.grade_slow", color: "#e8a04c" };
+  if (delta > -0.15) return { textKey: "rv.grade_bad", color: "#e07856" };
+  return { textKey: "rv.grade_blunder", color: "#e2543e" };
 }
 
 function render(): void {
@@ -168,8 +185,7 @@ function render(): void {
   board.setPosition(grid, curIdx > 0 ? pointOf(detail.moves[curIdx - 1]) : null, curIdx % 2 === 0 ? BLACK : 2);
 
   // 形势热力（后端 ownership 已统一为黑方视角）
-  const terrOn = document.getElementById("rv-terr")!.classList.contains("on");
-  if (terrOn && analysis && analysis.positions[curIdx]) {
+  if (terrToggle && analysis && analysis.positions[curIdx]) {
     board.setTerritory(analysis.positions[curIdx].ownership);
   } else {
     board.setTerritory(null);
@@ -178,11 +194,11 @@ function render(): void {
   // 本手分析
   const info = document.getElementById("rv-moveinfo")!;
   if (!analysis) {
-    info.innerHTML = `<span style="color:var(--ink-dim)">尚未分析。点击「AI 深度复盘」生成逐手胜率与推荐。</span>`;
+    info.innerHTML = `<span style="color:var(--ink-dim)">${t("rv.not_analyzed")}</span>`;
   } else if (curIdx === 0) {
     const p0 = analysis.positions[0];
     info.innerHTML = p0
-      ? `初始局面：黑胜率 <b style="color:#9db3e0">${(p0.winrate_black * 100).toFixed(1)}%</b><br>AI 推荐：<b>${p0.best ? coordName(p0.best.point, N) : "—"}</b>`
+      ? `${t("rv.initial", { p: (p0.winrate_black * 100).toFixed(1) })}<br>${t("rv.ai_best")}<b>${p0.best ? coordName(p0.best.point, N) : "—"}</b>`
       : "—";
   } else {
     const before = analysis.positions[curIdx - 1];
@@ -197,12 +213,15 @@ function render(): void {
       const best = before.best;
       const isBest = best && mv.point === best.point;
       info.innerHTML = `
-        第 <b>${curIdx}</b> 手 · ${mover === BLACK ? "黑" : "白"} <b>${mv.point == null ? "停一手" : coordName(mv.point, N)}</b>
-        ${isBest ? '<span style="color:#e8c860"> ✓ AI首选</span>' : ""}
-        <br>评价：<b style="color:${g.color}">${g.text}</b>（胜率 ${(delta * 100).toFixed(1)}pp）
-        <br>局面胜率：黑 <b style="color:#9db3e0">${(after.winrate_black * 100).toFixed(1)}%</b>
-        <br>目差：${after.score_lead_black >= 0 ? "黑" : "白"}优 <b>${Math.abs(after.score_lead_black).toFixed(1)}</b> 目
-        ${!isBest && best ? `<br>AI 建议：<b style="color:#e8c860">${coordName(best.point, N)}</b>（${(best.winrate_black * 100).toFixed(1)}%）` : ""}`;
+        ${t("rv.move_n_color", { n: curIdx, color: t(mover === BLACK ? "stone.black" : "stone.white") })} <b>${mv.point == null ? t("rv.pass_move") : coordName(mv.point, N)}</b>
+        ${isBest ? `<span style="color:#e8c860"> ${t("rv.ai_pick")}</span>` : ""}
+        <br>${t("rv.grade")}<b style="color:${g.color}">${t(g.textKey)}</b>${t("rv.winrate_drop", { p: (delta * 100).toFixed(1) })}
+        <br>${t("rv.pos_winrate", { p: (after.winrate_black * 100).toFixed(1) })}
+        <br>${t("rv.lead", {
+          who: t(after.score_lead_black >= 0 ? "stone.black" : "stone.white"),
+          x: Math.abs(after.score_lead_black).toFixed(1),
+        })}
+        ${!isBest && best ? `<br>${t("rv.suggest")}<b style="color:#e8c860">${coordName(best.point, N)}</b>（${(best.winrate_black * 100).toFixed(1)}%）` : ""}`;
     }
   }
   drawCurve();
@@ -253,6 +272,7 @@ function pointOf(m: { color: number; point: number | null }): number | null {
 // ── 胜率曲线（可点击跳转；黑上白下两极 + 50% 基线） ──
 function drawCurve(): void {
   const cv = document.getElementById("rv-curve") as HTMLCanvasElement;
+  if (!cv) return;
   const g = cv.getContext("2d")!;
   const W = cv.width;
   const H = cv.height;
@@ -272,9 +292,9 @@ function drawCurve(): void {
   g.setLineDash([]);
   g.font = "600 20px Consolas,monospace";
   g.fillStyle = "rgba(157,179,224,.75)";
-  g.fillText("黑", 10, 26);
+  g.fillText(t("stone.black"), 10, 26);
   g.fillStyle = "rgba(230,178,150,.75)";
-  g.fillText("白", 10, H - 12);
+  g.fillText(t("stone.white"), 10, H - 12);
 
   if (!analysis || analysis.positions.length < 2) return;
   const total = analysis.positions.length - 1;

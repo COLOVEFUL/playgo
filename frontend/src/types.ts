@@ -20,19 +20,24 @@ export interface MoveInfo {
   clock_left: number;
 }
 
+/** 后端统一错误载荷：稳定码 + 插值参数（文案由前端按语言组合）。 */
+export interface ErrPayload {
+  code: string;
+  args: Record<string, unknown>;
+}
+
 export interface ScorePreview {
   black_area: number;
   white_area: number;
   winner: number;
   margin: number;
   ownership: number[];
-  text: string;
 }
 
 export interface GameResult {
   winner: number | null;
   reason: string;
-  detail: string;
+  margin: number;
   sgf_result: string;
 }
 
@@ -120,7 +125,7 @@ export interface RecordDetail {
 export interface EngineStatus {
   available: boolean;
   engine: { exe: string; model: string; backend: string; gpu: boolean } | null;
-  missing: { id: string; label: string; size_mb: number }[];
+  missing: { id: string; size_mb: number }[];
   downloading?: boolean;
   installed?: Record<string, boolean>;
 }
@@ -130,11 +135,18 @@ export type WsEvent =
   | { type: "state"; game: GameState }
   | { type: "clocks"; clocks: Record<string, ClockView>; to_play: number; status: string }
   | { type: "engine"; engine: EngineStatus }
-  | { type: "error"; message: string }
+  | { type: "error"; error: ErrPayload }
   | { type: "saved"; path: string }
-  | { type: "download"; id: string; phase: string; pct?: number; [k: string]: unknown }
+  | {
+      type: "download";
+      id: string;
+      phase: string;
+      pct?: number;
+      error?: ErrPayload;
+      [k: string]: unknown;
+    }
   | { type: "engine_restarted"; engine: EngineStatus }
   | { type: "review_progress"; file: string; done: number; total: number }
   | { type: "review_done"; file: string; total: number }
-  | { type: "review_error"; file: string; error: string }
+  | { type: "review_error"; file: string; error: ErrPayload }
   | { type: "pong"; t: number };

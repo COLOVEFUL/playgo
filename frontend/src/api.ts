@@ -1,8 +1,20 @@
 /** REST + WebSocket 客户端；WS 事件通过 bus 广播。 */
 
-import type { WsEvent } from "./types";
+import type { ErrPayload, WsEvent } from "./types";
 
 export const bus = new EventTarget();
+
+/** 后端结构化错误（{code, args}，文案由 i18n.errText 本地化）。 */
+export class ApiError extends Error {
+  code: string;
+  args: Record<string, unknown>;
+
+  constructor(code: string, args: Record<string, unknown>) {
+    super(code);
+    this.code = code;
+    this.args = args;
+  }
+}
 
 export function onWs(listener: (ev: WsEvent) => void): () => void {
   const h = (e: Event) => listener((e as CustomEvent).detail);
@@ -42,14 +54,18 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
-    let detail = `${res.status}`;
+    let detail: string | ErrPayload | string[] = `${res.status}`;
     try {
-      const j = (await res.json()) as { detail?: string };
+      const j = (await res.json()) as { detail?: string | ErrPayload | string[] };
       if (j.detail) detail = j.detail;
     } catch {
       /* ignore */
     }
-    throw new Error(detail);
+    // 结构化错误（{code,args}）→ ApiError；422 校验错误是数组，其余为字符串
+    if (typeof detail === "object" && !Array.isArray(detail)) {
+      throw new ApiError(detail.code, detail.args ?? {});
+    }
+    throw new Error(typeof detail === "string" ? detail : `${res.status}`);
   }
   return (await res.json()) as T;
 }
