@@ -85,15 +85,17 @@ on your own machine, no account, no network required after setup.
 │   │   ├── game.py         Authoritative game state machine: turn order, per-player
 │   │   │                   clocks, byo-yomi periods, undo semantics, pass/scoring flow
 │   │   ├── katago.py       KataGo **analysis engine** wrapper: subprocess lifecycle,
-│   │   │                   JSON-line protocol, black-viewpoint normalization
-│   │   │                   (winrate 1−w, scoreLead/ownership −v when White to move),
+│   │   │                   JSON-line protocol, perspective pinned to Black
+│   │   │                   (reportAnalysisWinratesAs=BLACK — winrate/scoreLead/
+│   │   │                   ownership arrive black-viewpoint, no flipping),
 │   │   │                   difficulty = visit budget + policy-pow sampling
 │   │   ├── main.py         FastAPI app: REST + /ws, AI move orchestration,
 │   │   │                   auto dead-stone detection, review batch analysis
 │   │   ├── downloader.py   On-demand engine/model download with progress callbacks
 │   │   ├── sgf.py          SGF (FF4) writer/parser + records library
 │   │   └── settings.py     Time presets, difficulty table, official download URLs
-│   ├── tests/              19 tests: rules, ko, scoring, clocks/byo-yomi timeout
+│   ├── tests/              36 tests: rules, ko, scoring, clocks/byo-yomi timeout,
+│   │                       engine normalization (black-perspective)
 │   └── engines/            Runtime home of katago.exe + networks (git-ignored)
 │       ├── bundled/eigen/    CPU engine (fallback)
 │       └── downloaded/       OpenCL engine + strong network (preferred)
@@ -131,7 +133,7 @@ on your own machine, no account, no network required after setup.
 | Internal `point = y*19+x` | top-left, y down | used everywhere in PlayGo |
 | KataGo analysis `"Q16"` | bottom-left, letters skip **I** | converted in/out |
 | SGF `pd` | top-left, letters a–s (no skip) | converted in/out |
-| Perspective | — | KataGo reports winrate/ownership for the **player to move**; PlayGo normalizes everything to **Black's viewpoint** (`1−w` for probabilities, `−v` for signed values) |
+| Perspective | — | the engine is pinned with `reportAnalysisWinratesAs=BLACK` (matching the shipped config): winrate / scoreLead / ownership always arrive in **Black's viewpoint** regardless of whose turn it is, and flow through unmodified |
 
 ### API surface
 
@@ -147,7 +149,7 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
 | Layer | Choice | Why |
 |---|---|---|
 | Backend | **Python 3.11+ / FastAPI / uvicorn** | subprocess management and async I/O for the engine pipes; typed request models; first-class WebSocket |
-| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** (19 tests) | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
+| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** (36 tests) | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
 | Frontend | **TypeScript + Canvas 2D, Vite** | a Go board is one big custom-drawn surface; no framework overhead (~40 KB gz), full control of rendering, DPR-correct drawing |
 | Charts | hand-rolled canvas lines, colors validated for CVD | the win-rate curve is one diverging series; a charting library would outweigh it |
 | Audio | WebAudio synthesis | zero audio assets to license or ship |
@@ -165,6 +167,13 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
   move is either taken as-is (hard) or sampled from the top-k candidate moves
   with weights `prior^p` (easy/medium) — this reproduces human-like
   inaccuracy at low cost on a single strong network.
+- **Black-viewpoint contract**: the subprocess is started with
+  `reportAnalysisWinratesAs=BLACK` (the same value the official config ships
+  since v1.13), so every winrate, score lead and ownership value — for AI
+  moves, hints, territory and review alike — already is from Black's
+  perspective no matter whose turn it is; nothing downstream flips it. Review
+  caches carry a `perspective` marker and pre-fix caches are treated as
+  un-analyzed.
 - **Dead-stone detection** at scoring reuses the analysis `ownership` vector:
   stones sitting on points owned by the opponent beyond a threshold are
   proposed as dead; the player can override by clicking.

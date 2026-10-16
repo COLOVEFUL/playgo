@@ -107,6 +107,8 @@ export interface ReviewPosition {
 export interface ReviewAnalysis {
   file: string;
   visits: number;
+  /** 视角标记：后端只下发 "black" 标记过的新版数据（旧版按行棋方翻转，已作废） */
+  perspective?: string;
   positions: ReviewPosition[];
 }
 

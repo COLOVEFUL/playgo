@@ -386,7 +386,13 @@ async def record_detail(file_path: str) -> dict:
     analysis_file = f.with_suffix(".analysis.json")
     analysis = None
     if analysis_file.exists():
-        analysis = json.loads(analysis_file.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(analysis_file.read_text(encoding="utf-8"))
+        except ValueError:
+            data = None  # 损坏的缓存当作未分析
+        # 视角修复（2026-10）前生成的旧文件 odd 手是反的，缺标记一律视为未分析
+        if data and data.get("perspective") == "black":
+            analysis = data
     return {
         "file": file_path,
         "size": g.size,
@@ -449,6 +455,7 @@ async def review_analyze(req: ReviewReq) -> dict:
             data = {
                 "file": job_key,
                 "visits": settings.REVIEW_VISITS,
+                "perspective": "black",  # 视角标记：旧版（按行棋方翻转）文件视为过期
                 "positions": out_positions,
             }
             f.with_suffix(".analysis.json").write_text(

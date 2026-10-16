@@ -45,9 +45,13 @@ def from_kata_coords(s: str, size: int = 19) -> int:
 
 @dataclass
 class Analysis:
-    """一次局面分析的归一化结果（一律“黑方视角”：胜率>0 为黑优）。"""
+    """一次局面分析的归一化结果（一律“黑方视角”：胜率>0 为黑优）。
 
-    to_move: int  # 分析局面下该谁走
+    引擎输出本身即黑方视角（启动时已钉死 reportAnalysisWinratesAs=BLACK），
+    这里不做任何翻转；to_move 仅记录该局面轮谁走，供上层参考。
+    """
+
+    to_move: int  # 分析局面下该谁走（不参与胜率换算）
     winrate_black: float  # 0..1
     score_lead_black: float  # 目差（黑领先为正）
     ownership: list[float]  # +黑 -白，len=size*size
@@ -101,6 +105,9 @@ class KataGoEngine:
             overrides = ",".join(
                 [
                     f"logDir={settings.LOGS_DIR.as_posix()}",
+                    # 官方 cfg（v1.13+）默认 reportAnalysisWinratesAs=BLACK：winrate/scoreLead/
+                    # ownership 一律黑方视角。显式钉死，防止未来 cfg 变更悄悄改变视角语义。
+                    "reportAnalysisWinratesAs=BLACK",
                     "logToStderr=true",
                     "logToStdout=false",
                     "logAllGTPCommunication=false",
@@ -295,19 +302,15 @@ class KataGoEngine:
         return self._normalize(data, to_move, size)
 
     def _normalize(self, data: dict, to_move: int, size: int) -> Analysis:
-        """KataGo 输出以"当前行棋方"为视角；统一转换为黑方视角。
+        """归一化引擎输出。启动已钉死 reportAnalysisWinratesAs=BLACK，
+        winrate/scoreLead/ownership 本身即黑方视角（+黑 −白），直接透传。
 
-        winrate 是 [0,1] 概率，翻转用 1-w；scoreLead/ownership 是对称量，翻转取负。
+        历史 bug：曾以为输出是“行棋方视角”而按 to_move 翻转，导致所有轮白走
+        的局面胜率/归属被反向（复盘曲线在 50% 上下锯齿、白回合形势判断黑白颠倒）。
+        可用 rootInfo.currentPlayer 核对行棋方，但视角本身不再依赖 to_move。
         """
         root = data.get("rootInfo", {})
-
-        def wr_black(w: float) -> float:
-            return w if to_move == BLACK else 1.0 - w
-
-        def lead_black(v: float) -> float:
-            return v if to_move == BLACK else -v
-
-        ownership = [lead_black(v) for v in data.get("ownership", [0.0] * (size * size))]
+        ownership = list(data.get("ownership") or [0.0] * (size * size))
         best: list[dict] = []
         for m in sorted(data.get("moveInfos", []), key=lambda m: m.get("order", 99)):
             mv = m.get("move", "")
@@ -322,15 +325,15 @@ class KataGoEngine:
                     "point": point,
                     "order": m.get("order", 99),
                     "prior": m.get("prior", 0.0),
-                    "winrate_black": wr_black(m["winrate"]),
-                    "score_lead_black": lead_black(m["scoreLead"]),
+                    "winrate_black": m["winrate"],
+                    "score_lead_black": m["scoreLead"],
                     "pv": m.get("pvVisits", None) or [],
                 }
             )
         return Analysis(
             to_move=to_move,
-            winrate_black=wr_black(root.get("winrate", 0.5)),
-            score_lead_black=lead_black(root.get("scoreLead", 0.0)),
+            winrate_black=root.get("winrate", 0.5),
+            score_lead_black=root.get("scoreLead", 0.0),
             ownership=ownership,
             best_moves=best,
             visits=root.get("visits", 0),

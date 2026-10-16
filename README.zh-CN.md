@@ -78,15 +78,16 @@
 │   │   ├── game.py         权威对局状态机：轮转、双方时钟、读秒次数、
 │   │   │                   悔棋语义、停一手与点目流程
 │   │   ├── katago.py       KataGo analysis 引擎封装：子进程生命周期、
-│   │   │                   JSON 行协议、黑方视角归一化（白行棋时
-│   │   │                   winrate 取 1−w、scoreLead/ownership 取 −v）、
+│   │   │                   JSON 行协议、视角钉死为黑方
+│   │   │                   （reportAnalysisWinratesAs=BLACK，胜率/目差/
+│   │   │                   归属天然黑方视角，无需翻转）、
 │   │   │                   难度 = 搜索量 + 先验幂次采样
 │   │   ├── main.py         FastAPI 入口：REST + /ws、AI 行棋编排、
 │   │   │                   自动死活判定、复盘批量分析
 │   │   ├── downloader.py   引擎/模型按需下载（进度回调 → WS）
 │   │   ├── sgf.py          SGF（FF4）写入/解析 + 棋谱库
 │   │   └── settings.py     用时预设、难度表、官方下载直链
-│   ├── tests/              19 项测试：规则/劫/点目/读秒判负
+│   ├── tests/              36 项测试：规则/劫/点目/读秒判负/引擎黑方视角归一化
 │   └── engines/            引擎与模型的运行时目录（git 忽略）
 │       ├── bundled/eigen/    CPU 引擎（回退）
 │       └── downloaded/       OpenCL 引擎 + 强网络（优先）
@@ -121,7 +122,7 @@
 | 内部 `point = y*19+x` | 左上，y 向下 | PlayGo 全局使用 |
 | KataGo `"Q16"` | 左下，字母跳过 **I** | 出入双向转换 |
 | SGF `pd` | 左上，字母 a–s 连续 | 出入双向转换 |
-| 视角 | — | KataGo 以**当前行棋方**视角输出；PlayGo 统一归一为**黑方视角**（概率用 1−w，带符号量用 −v） |
+| 视角 | — | 引擎以 `reportAnalysisWinratesAs=BLACK` 钉死（与官方 cfg 一致）：胜率/目差/归属**一律黑方视角**，与轮谁走无关，全链路直接透传 |
 
 ### API 一览
 
@@ -137,7 +138,7 @@ WS `/ws` 事件：`state`、`clocks`、`engine`、`download`、`saved`、
 | 层 | 选型 | 理由 |
 |---|---|---|
 | 后端 | **Python 3.11+ / FastAPI / uvicorn** | 子进程与管道的异步管理；类型化请求模型；原生 WebSocket |
-| 后端工具 | **uv**（依赖+虚拟环境）、**ruff**（lint/format）、**pytest**（19 项测试） | 现代、快速、单一配置；`uv_build` 打包后 `uv run uvicorn playgo.main:app` 开箱即用 |
+| 后端工具 | **uv**（依赖+虚拟环境）、**ruff**（lint/format）、**pytest**（36 项测试） | 现代、快速、单一配置；`uv_build` 打包后 `uv run uvicorn playgo.main:app` 开箱即用 |
 | 前端 | **TypeScript + Canvas 2D + Vite** | 棋盘是一整块自绘表面：无框架负担（产物约 40 KB gzip），渲染与 DPR 处理完全可控 |
 | 图表 | 手绘 Canvas 折线，配色经 CVD 校验 | 胜率曲线是单一分叉序列，引图表库得不偿失 |
 | 音效 | WebAudio 实时合成 | 无音频资源需要许可或分发 |
@@ -152,6 +153,10 @@ WS `/ws` 事件：`state`、`clocks`、`engine`、`download`、`saved`、
 - **难度实现**基于查询参数：`maxVisits` 限制搜索量；困难档直接取最优，
   简单/中等档在 top-k 候选中按 `prior^p` 权重采样——单强网络低成本复现
   人类式的失误
+- **黑方视角契约**：子进程启动即加 `reportAnalysisWinratesAs=BLACK`（与
+  官方 cfg 一致），AI 行棋/推荐/形势/复盘的所有胜率、目差、归属天然都是
+  黑方视角（与轮谁走无关），全链路直接透传不翻转；复盘缓存带
+  `perspective` 标记，视角修复前的旧缓存自动视为未分析
 - **死活判定**复用分析的 `ownership` 向量：位于对方控制区的棋子（超阈值）
   自动标为死子，玩家可点击覆盖
 - 引擎（v1.18.1，GPU 用 OpenCL 构建 / CPU 用 Eigen）与 `kata1-b18c384nbt`

@@ -48,20 +48,27 @@ async def main() -> None:
     # 星位/小目一类点位（空盘 KataGo 最优通常是角部）
     assert all(0 <= m["point"] < 361 for m in top)
 
-    # 下了几手后再分析，验证 ownership 符号（黑棋区域应为正）
-    moves = [(BLACK, 3 + 3 * 19), (3 - BLACK, 15 + 15 * 19), (BLACK, 15 + 3 * 19)]
+    # 下了几手后再分析，验证 ownership 符号。该局面轮白走（to_move=2）——
+    # 引擎输出已钉死黑方视角，轮谁走都不翻转；若回归“按行棋方翻转”的旧 bug
+    # 会在此直接断言失败。注意取“棋子本点”而非 2-2 空点：后者常因预期点三三
+    # 入侵被网络判为对方势力，符号不稳定，不能用作视角校验。
     moves = [(1, 3 + 3 * 19), (2, 15 + 15 * 19), (1, 15 + 3 * 19)]
     t0 = time.monotonic()
     ana2 = await engine.analyze(moves, to_move=2, max_visits=40)
     own = ana2.ownership
-    near_black_corner = own[2 + 2 * 19]  # 黑星位(3,3)附近
-    near_white_corner = own[16 + 16 * 19]  # 白星位(16,16)附近
+    black_stone = own[3 + 3 * 19]  # 黑星位(3,3)本点
+    white_stone = own[15 + 15 * 19]  # 白星位(15,15)本点
     print(
-        f"[OK] 3手后分析 {time.monotonic() - t0:.1f}s 黑角ownership={near_black_corner:+.2f} "
-        f"白角ownership={near_white_corner:+.2f}"
+        f"[OK] 3手后分析 {time.monotonic() - t0:.1f}s 黑子ownership={black_stone:+.2f} "
+        f"白子ownership={white_stone:+.2f} 黑胜率={ana2.winrate_black:.3f} "
+        f"目差={ana2.score_lead_black:+.1f}"
     )
-    assert near_black_corner > 0.2, "黑棋角部 ownership 应为正（黑视角归一化）"
-    assert near_white_corner < -0.2, "白棋角部 ownership 应为负"
+    assert black_stone > 0.3, "黑子本点 ownership 应为正（黑视角，与轮谁走无关）"
+    assert white_stone < -0.3, "白子本点 ownership 应为负"
+    # winrate 与 scoreLead 同侧（都从黑方视角）：跨字段视角一致性
+    assert (ana2.winrate_black < 0.5) == (ana2.score_lead_black < 0), (
+        f"winrate({ana2.winrate_black:.3f}) 与目差({ana2.score_lead_black:+.1f}) 视角不一致"
+    )
 
     # AI 选点（各难度）
     for diff in ("easy", "medium", "hard"):
