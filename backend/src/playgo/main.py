@@ -95,9 +95,8 @@ class AppState:
         g.ai_thinking = True
         self.emit_state()
         try:
-            engine = await self.engine.ensure_started()
             moves = [(m.color, m.point) for m in g.moves]
-            point, _ana = await engine.pick_move(moves, g.to_play, g.cfg.difficulty)
+            point, _ana = await self.engine.pick_move(moves, g.to_play, g.cfg.difficulty)
             if not self._ai_needs_move():  # 期间被悔棋/新对局
                 return
             if point is None:
@@ -157,7 +156,7 @@ class AppState:
         if cache and cache[0] == sig:
             return cache[1]
         moves = list(sig)
-        ana = await engine.analyze(moves, to_move=g.to_play, max_visits=v)
+        ana = await self.engine.analyze(moves, to_move=g.to_play, max_visits=v)
         if territory:
             self._terr_cache = (sig, ana)
         else:
@@ -416,13 +415,12 @@ async def review_analyze(req: ReviewReq) -> dict:
     async def _run() -> None:
         out_positions = []
         try:
-            engine = await state.engine.ensure_started()
             moves = sgf.moves
             total = len(moves) + 1
             hist: list[tuple[int, int | None]] = []
             to_move = BLACK
             for i in range(total):
-                ana = await engine.analyze(
+                ana = await state.engine.analyze(
                     hist, to_move=to_move, max_visits=settings.REVIEW_VISITS
                 )
                 out_positions.append(
@@ -557,6 +555,9 @@ async def startup() -> None:
     async def _warm_engine() -> None:
         try:
             await state.engine.ensure_started()
+            # 预热查询：触发模型加载/OpenCL 调优，并探测引擎实例是否卡死
+            # （卡死会被 EngineManager 自动重启重试，避免对局中才暴露）
+            await state.engine.analyze([], to_move=BLACK, max_visits=5, timeout=300)
             await state.broadcast({"type": "engine", "engine": state.engine.status()})
         except EngineError as e:
             log.warning("引擎不可用: %s", e)

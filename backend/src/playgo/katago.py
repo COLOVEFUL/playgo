@@ -15,18 +15,21 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 from playgo import settings
 from playgo.errors import PlayGoError
 from playgo.rules import BLACK
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
 log = logging.getLogger("playgo.katago")
 
 KATA_LETTERS = "ABCDEFGHJKLMNOPQRST"  # 跳过 I
+
+T = TypeVar("T")
 
 
 def to_kata_coords(point: int, size: int = 19) -> str:
@@ -124,6 +127,9 @@ class KataGoEngine:
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    # KataGo 的单行 JSON 响应可达数百 KB（visits 大/PV 长时），
+                    # 默认 64KB 行上限会让 readline 抛错杀死读取任务 → 引擎"失聪"
+                    limit=2**22,
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 )
             except OSError as e:
@@ -168,32 +174,39 @@ class KataGoEngine:
     async def _read_stdout(self) -> None:
         assert self.proc
         assert self.proc.stdout
-        while True:
-            line = await self.proc.stdout.readline()
-            if not line:
-                break
-            text = line.decode("utf-8", errors="replace").strip()
-            if not text:
-                continue
-            try:
-                data = json.loads(text)
-            except json.JSONDecodeError:
-                continue  # 表头等非 JSON 行
-            self._any_response_seen = True
-            rid = data.get("id")
-            fut = self._pending.get(rid)
-            if fut and not fut.done():
-                if data.get("isDuringSearch"):
-                    continue  # 只要最终结果
-                if "warning" in data and "rootInfo" not in data:
-                    log.warning("引擎告警: %s", data)
-                    continue  # 告警行可能带查询 id，不能当结果
-                fut.set_result(data)
-        # 进程结束：唤醒所有等待者
-        for fut in self._pending.values():
-            if not fut.done():
-                msg = "引擎进程已退出"
-                fut.set_exception(EngineError(msg, code="engine.exited"))
+        try:
+            while True:
+                line = await self.proc.stdout.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").strip()
+                if text:
+                    self._handle_stdout_line(text)
+        except Exception:
+            # 读取任务死亡 = 引擎从此"失聪"，必须显式记录而非静默退出
+            log.exception("引擎 stdout 读取任务异常")
+        finally:
+            # 进程结束或读取异常：唤醒所有等待者
+            for fut in self._pending.values():
+                if not fut.done():
+                    msg = "引擎进程已退出"
+                    fut.set_exception(EngineError(msg, code="engine.exited"))
+
+    def _handle_stdout_line(self, text: str) -> None:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return  # 表头等非 JSON 行
+        self._any_response_seen = True
+        fut = self._pending.get(data.get("id"))
+        if not fut or fut.done():
+            return
+        if data.get("isDuringSearch"):
+            return  # 只要最终结果
+        if "warning" in data and "rootInfo" not in data:
+            log.warning("引擎告警: %s", data)
+            return  # 告警行可能带查询 id，不能当结果
+        fut.set_result(data)
 
     async def _read_stderr(self) -> None:
         assert self.proc
@@ -220,6 +233,11 @@ class KataGoEngine:
             await self.proc.wait()
         self.proc = None
 
+    def auto_timeout(self, max_visits: int) -> float:
+        """按 visits 与后端估算单次查询超时：GPU 快，CPU(Eigen) 慢。"""
+        per_visit = 0.12 if self.is_gpu else 2.5
+        return max(60.0, 30.0 + max_visits * per_visit)
+
     async def analyze(
         self,
         moves: list[tuple[int, int | None]],
@@ -228,12 +246,18 @@ class KataGoEngine:
         max_visits: int,
         size: int = 19,
         komi: float = settings.KOMI,
-        timeout: float = 60.0,
+        timeout: float = 0.0,
     ) -> Analysis:
-        """分析当前局面。moves 为已落子的历史（不含即将走的一手）。"""
+        """分析当前局面。moves 为已落子的历史（不含即将走的一手）。
+
+        timeout<=0 时按 visits/后端自动估算（困难档 800 visits 在 GPU 上
+        也可能超过固定 60s）。
+        """
         if not self.ready:
             msg = "引擎未就绪"
             raise EngineError(msg, code="engine.not_ready")
+        if timeout <= 0:
+            timeout = self.auto_timeout(max_visits)
         rid = uuid.uuid4().hex[:12]
         payload = {
             "id": rid,
@@ -259,6 +283,8 @@ class KataGoEngine:
             await self.proc.stdin.drain()
             data = await asyncio.wait_for(fut, timeout)
         except TimeoutError:
+            tail = "\n".join(self._stderr_tail[-5:])
+            log.warning("分析超时(%ss) stderr尾: %s", timeout, tail)
             msg = f"分析超时({timeout}s)"
             raise EngineError(
                 msg, code="engine.analyze_timeout", params={"timeout": timeout}
@@ -414,11 +440,54 @@ class EngineManager:
             self._starting = None
 
     async def restart(self) -> KataGoEngine:
-        """下载完成后重建引擎。"""
+        """重建引擎（引擎实例可能卡死：进程活着但对查询无响应）。"""
         if self.engine:
             await self.engine.stop()
             self.engine = None
         return await self.ensure_started()
+
+    # ── 带自愈的查询入口：超时=引擎实例疑似卡死，重启后重试一次 ──
+
+    async def _retry_on_wedge(self, query: Callable[[KataGoEngine], Awaitable[T]]) -> T:
+        for attempt in (1, 2):
+            engine = await self.ensure_started()
+            try:
+                return await query(engine)
+            except EngineError as e:
+                if e.code != "engine.analyze_timeout" or attempt == 2:
+                    raise
+                log.warning("引擎无响应，重启后重试: %s", e)
+                await self.restart()
+        raise EngineError(msg="unreachable", code="engine.not_ready")
+
+    async def analyze(
+        self,
+        moves: list[tuple[int, int | None]],
+        *,
+        to_move: int,
+        max_visits: int,
+        size: int = 19,
+        komi: float = settings.KOMI,
+        timeout: float = 0.0,
+    ) -> Analysis:
+        return await self._retry_on_wedge(
+            lambda engine: engine.analyze(
+                moves, to_move=to_move, max_visits=max_visits,
+                size=size, komi=komi, timeout=timeout,
+            )
+        )
+
+    async def pick_move(
+        self,
+        moves: list[tuple[int, int | None]],
+        to_move: int,
+        difficulty: str,
+        *,
+        size: int = 19,
+    ) -> tuple[int | None, Analysis]:
+        return await self._retry_on_wedge(
+            lambda engine: engine.pick_move(moves, to_move, difficulty, size=size)
+        )
 
     async def shutdown(self) -> None:
         if self.engine:
