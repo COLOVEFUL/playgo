@@ -18,11 +18,16 @@ backend/engines/**/*.cfg
 backend/engines/opencltuning*
 
 # 运行产物
-records/*.sgf
+records/
 *.log
 
 # 工具截图
 .playwright-mcp/
+*.png
+!design/**/*.png
+
+# 打包产物
+dist-app/
 
 # 会话/工具目录
 .claude/
