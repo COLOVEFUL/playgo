@@ -8,6 +8,16 @@ dependencies = [
     "uvicorn[standard]>=0.30",
 ]
 
+[build-system]
+requires = ["uv_build>=0.7,<1"]
+build-backend = "uv_build"
+
+[tool.uv]
+package = true
+
+[tool.uv.build-backend]
+module-name = "playgo"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

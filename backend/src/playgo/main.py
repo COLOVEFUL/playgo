@@ -137,7 +137,7 @@ class AppState:
         self.emit_state()
 
     async def analyze_current(
-        self, *, visits: int | None, territory: bool = False
+        self, *, visits: int | None = None, territory: bool = False
     ) -> Analysis | None:
         """分析当前局面（带手数缓存）。visits=None 时按用途取默认。"""
         g = self.game

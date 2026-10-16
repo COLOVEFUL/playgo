@@ -257,9 +257,19 @@ class KataGoEngine:
         return self._normalize(data, to_move, size)
 
     def _normalize(self, data: dict, to_move: int, size: int) -> Analysis:
+        """KataGo 输出以"当前行棋方"为视角；统一转换为黑方视角。
+
+        winrate 是 [0,1] 概率，翻转用 1-w；scoreLead/ownership 是对称量，翻转取负。
+        """
         root = data.get("rootInfo", {})
-        sign = 1.0 if to_move == BLACK else -1.0
-        ownership = [v * sign for v in data.get("ownership", [0.0] * (size * size))]
+
+        def wr_black(w: float) -> float:
+            return w if to_move == BLACK else 1.0 - w
+
+        def lead_black(v: float) -> float:
+            return v if to_move == BLACK else -v
+
+        ownership = [lead_black(v) for v in data.get("ownership", [0.0] * (size * size))]
         best: list[dict] = []
         for m in sorted(data.get("moveInfos", []), key=lambda m: m.get("order", 99)):
             mv = m.get("move", "")
@@ -274,15 +284,15 @@ class KataGoEngine:
                     "point": point,
                     "order": m.get("order", 99),
                     "prior": m.get("prior", 0.0),
-                    "winrate_black": m["winrate"] * sign,
-                    "score_lead_black": m["scoreLead"] * sign,
+                    "winrate_black": wr_black(m["winrate"]),
+                    "score_lead_black": lead_black(m["scoreLead"]),
                     "pv": m.get("pvVisits", None) or [],
                 }
             )
         return Analysis(
             to_move=to_move,
-            winrate_black=root.get("winrate", 0.5) * sign,
-            score_lead_black=root.get("scoreLead", 0.0) * sign,
+            winrate_black=wr_black(root.get("winrate", 0.5)),
+            score_lead_black=lead_black(root.get("scoreLead", 0.0)),
             ownership=ownership,
             best_moves=best,
             visits=root.get("visits", 0),
