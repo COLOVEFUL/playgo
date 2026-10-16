@@ -171,9 +171,10 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
 - The engine (v1.18.1, OpenCL build for GPUs / Eigen for CPU) and the
   `kata1-b18c384nbt` network are downloaded **from official sources only**
   (GitHub releases · katagotraining.org) on first use, with progress shown
-  in-app; GPU is auto-preferred with CPU fallback. First GPU query triggers
-  OpenCL tuning (~a minute, cached afterwards — subsequent replies are
-  sub-second).
+  in-app; GPU is auto-preferred with CPU fallback. The server warms the
+  engine at startup, absorbing first-run OpenCL tuning (~a minute, cached
+  afterwards); query timeouts scale with difficulty and a wedged engine
+  instance is restarted and retried automatically.
 - Other open-source components and their licenses are inventoried in
   [docs/licenses/THIRD-PARTY-NOTICES.md](docs/licenses/THIRD-PARTY-NOTICES.md).
 

@@ -156,8 +156,9 @@ WS `/ws` 事件：`state`、`clocks`、`engine`、`download`、`saved`、
   自动标为死子，玩家可点击覆盖
 - 引擎（v1.18.1，GPU 用 OpenCL 构建 / CPU 用 Eigen）与 `kata1-b18c384nbt`
   网络**仅从官方源下载**（GitHub Releases · katagotraining.org），首次使用
-  时应用内展示进度；GPU 优先、CPU 自动回退。首次 GPU 查询会触发 OpenCL
-  调优（约一分钟，之后缓存；后续响应亚秒级）
+  时应用内展示进度；GPU 优先、CPU 自动回退。服务启动即预热引擎，首日运行
+  的 OpenCL 调优（约一分钟）在预热中完成并缓存；查询超时按难度自适应，
+  引擎异常时自动重启重试
 - 其他开源组件及许可证清单：
   [docs/licenses/THIRD-PARTY-NOTICES.md](docs/licenses/THIRD-PARTY-NOTICES.md)
 

@@ -30,7 +30,7 @@ npx tsc --noEmit   # 仅类型检查
 ## 架构要点
 
 - **单实例状态**：`main.py` 模块级 `AppState` 持有全局唯一的 `GameSession`（一次只存在一盘棋）、`EngineManager`、`DownloadManager` 与 WS 客户端集合。命令走 REST `/api/...`，状态经 `/ws` 广播（`state`/`clocks`/`engine`/`download`/`saved`/`review_*`/`error`）。
-- **一个引擎进程服务所有需求**：`EngineManager` 优先 OpenCL(GPU)、失败回落 Eigen(CPU)，spawn `katago analysis` 子进程走 stdin/stdout JSON 行协议。AI 行棋、推荐、形势、复盘只是 visits 与采样参数不同，不另起进程。首次 GPU 查询会触发 OpenCL 调优（约 1 分钟，之后亚秒）。
+- **一个引擎进程服务所有需求**：`EngineManager` 优先 OpenCL(GPU)、失败回落 Eigen(CPU)，spawn `katago analysis` 子进程走 stdin/stdout JSON 行协议。AI 行棋、推荐、形势、复盘只是 visits 与采样参数不同，不另起进程。查询统一走 `EngineManager.analyze/pick_move` 自愈入口（超时=实例疑似卡死，自动重启重试一次）；启动时的预热查询（5 visits）提前触发调优并探测卡死实例，首次运行的 OpenCL 调优约 1 分钟，之后亚秒。
 - **职责分层**：`rules.py` 纯规则（提子、positional superko、中国规则数子法，全单测）；`game.py` 权威状态机（回合、双方独立计时/读秒、悔棋语义、pass 与点目流程）；`sgf.py` SGF(FF4) 读写 + `records/` 棋谱库；`settings.py` 集中所有预置（难度表、用时、官方下载 URL）。
 - **AI 行棋竞态防护**：`schedule_ai()` 的回复在落子前重新校验当前该谁走，悔棋/新对局期间到达的回复直接丢弃。
 - **缓存键 = 完整着法序列**（非手数）：`_hint_cache`/`_terr_cache`，悔棋重下同手数也会失效。
@@ -38,6 +38,7 @@ npx tsc --noEmit   # 仅类型检查
 
 ## 关键约定（易错点）
 
+- **子进程行上限陷阱**：KataGo 单行 JSON 响应可达 135KB+（visits 越大越长），`create_subprocess_exec` 必须传 `limit=2**22`——asyncio `StreamReader` 默认 64KB 行上限会让 `readline()` 抛错**静默杀死读取任务**，表象是随机"分析超时"且引擎永久失聪（简单/中等档响应小不触发，困难档必中）。查询超时按 visits/后端用 `auto_timeout` 估算，勿回退固定 60s。
 - **坐标三套体系**：内部 `point = y*19+x`（左上原点、y 向下）；KataGo `Q16`（字母跳 I、从底部数行）；SGF `pd`（a–s 不跳）。转换只在 `katago.py` / `sgf.py` 进出。
 - **一律黑方视角**：KataGo 报的是"行棋方"视角，`Analysis` 归一化为黑方（胜率 `1−w`、目差/归属 `−v`）。胜率 >0 即黑优。
 - **错误协议**：后端不产出任何用户可见文案——异常（`errors.py` 的 `PlayGoError` 系）携带稳定 `code` + `params`，REST detail 与 WS error 事件下发 `{"code","args"}`，前端 `i18n.errText` 查词典组词。新增错误必须两侧同步（`errors.py` ↔ `ERR_KEY` 表 ↔ 两份词典）。
