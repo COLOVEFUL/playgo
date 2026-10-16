@@ -70,6 +70,9 @@ class KataGoEngine:
         self._lock = asyncio.Lock()
         self.ready = False
         self.failed_reason: str | None = None
+        self._any_response_seen = False
+        self._ready_line_seen = False
+        self._stderr_tail: list[str] = []
         # Eigen CPU 减线程，OpenCL 按 GPU 线程
         self.num_threads = 2 if backend == "eigen" else 12
 
@@ -154,7 +157,6 @@ class KataGoEngine:
 
     _any_response_seen = False
     _ready_line_seen = False
-    _stderr_tail: list[str] = []
 
     async def _read_stdout(self) -> None:
         assert self.proc
