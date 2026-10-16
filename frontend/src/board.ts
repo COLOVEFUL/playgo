@@ -1,6 +1,6 @@
 /** 拟真围棋棋盘 Canvas 组件。
 
-木纹（程序化）、质感棋子（渐变+高光+投影）、落子/提子动画、
+纯色木底、质感棋子（渐变+高光+投影）、落子/提子动画、
 悬停幽灵子、AI 推荐标记、形势热力图、死子标记、复盘导航。
 */
 
@@ -22,17 +22,6 @@ interface Anim {
   color: number;
 }
 
-// 伪随机（木纹固定种子）
-function mulberry32(a: number) {
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 export class GoBoard {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -47,7 +36,6 @@ export class GoBoard {
   private anims = new Map<number, Anim>();
   private hover: number | null = null;
   private raf = 0;
-  private woodCache: HTMLCanvasElement | null = null;
   private cssSize = 0;
   private dpr = 1;
 
@@ -93,7 +81,6 @@ export class GoBoard {
     this.canvas.height = Math.round(this.cssSize * this.dpr);
     this.canvas.style.width = `${this.cssSize}px`;
     this.canvas.style.height = `${this.cssSize}px`;
-    this.woodCache = null;
     this.render();
   }
 
@@ -104,7 +91,6 @@ export class GoBoard {
     this.board = new Int8Array(n * n);
     this.dead.clear();
     this.anims.clear();
-    this.woodCache = null;
     this.lastMove = null;
   }
 
@@ -218,61 +204,15 @@ export class GoBoard {
   }
 
   private drawWood(): void {
+    // 纯净木色底：无纹理噪点，仅轻微上下明暗模拟受光
+    const { ctx } = this;
     const S = this.cssSize;
-    if (!this.woodCache) {
-      // 木纹按物理像素生成（putImageData 不受 transform 影响）
-      const c = document.createElement("canvas");
-      const S2 = Math.round(S * this.dpr);
-      c.width = c.height = S2;
-      const g = c.getContext("2d")!;
-      const img = g.createImageData(S2, S2);
-      const GS = 41;
-      const grid = new Float32Array((GS + 1) * (GS + 1));
-      const rnd = mulberry32(7);
-      for (let i = 0; i < grid.length; i++) grid[i] = rnd();
-      const noise = (x: number, y: number) => {
-        const gx = (x / S2) * GS;
-        const gy = (y / S2) * GS;
-        const ix = Math.floor(gx);
-        const iy = Math.floor(gy);
-        const fx = gx - ix;
-        const fy = gy - iy;
-        const s = (a: number, b: number) => grid[Math.min(b, GS) * (GS + 1) + Math.min(a, GS)];
-        const u = fx * fx * (3 - 2 * fx);
-        const v = fy * fy * (3 - 2 * fy);
-        return s(ix, iy) * (1 - u) * (1 - v) + s(ix + 1, iy) * u * (1 - v) + s(ix, iy + 1) * (1 - u) * v + s(ix + 1, iy + 1) * u * v;
-      };
-      // 纹理频率按逻辑像素定义，物理坐标除以 dpr 采样
-      const k = 1 / this.dpr;
-      for (let y = 0; y < S2; y++) {
-        const ly = y * k;
-        for (let x = 0; x < S2; x++) {
-          const lx = x * k;
-          const n1 = noise(x, y);
-          const n2 = noise(x * 0.5 + 13, y * 0.5 + 57);
-          const warp = Math.sin(ly * 0.011 + n1 * 6.5) * 9 + Math.sin(ly * 0.0042 + n1 * 3) * 20;
-          let grain = Math.sin((lx + warp) * ((Math.PI * 2) / 33) + n2 * 1.3);
-          grain = Math.pow(0.5 + 0.5 * grain, 1.7);
-          const ring = 0.5 + 0.5 * Math.sin((lx + warp) * 0.0065 + n1 * 4.2);
-          const t = grain * 0.52 + ring * 0.2 + n2 * 0.28;
-          const i = (y * S2 + x) * 4;
-          img.data[i] = 201 + t * 30 + ring * 6;
-          img.data[i + 1] = 144 + t * 42;
-          img.data[i + 2] = 76 + t * 25;
-          img.data[i + 3] = 255;
-        }
-      }
-      g.putImageData(img, 0, 0);
-      const sheen = g.createLinearGradient(0, 0, S2, S2 * 0.9);
-      sheen.addColorStop(0, "rgba(255,244,214,.10)");
-      sheen.addColorStop(0.35, "rgba(255,244,214,.03)");
-      sheen.addColorStop(0.6, "rgba(40,20,5,.05)");
-      sheen.addColorStop(1, "rgba(40,20,5,.12)");
-      g.fillStyle = sheen;
-      g.fillRect(0, 0, S2, S2);
-      this.woodCache = c;
-    }
-    this.ctx.drawImage(this.woodCache, 0, 0, S, S);
+    const grad = ctx.createLinearGradient(0, 0, 0, S);
+    grad.addColorStop(0, "#e2b46b");
+    grad.addColorStop(0.5, "#dcae5f");
+    grad.addColorStop(1, "#d6a756");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, S, S);
   }
 
   private drawGrid(): void {
