@@ -2,7 +2,7 @@
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-本地运行的围棋对弈程序：拟真木纹棋盘、**KataGo 驱动的三档 AI**、实时 AI 推荐
+本地运行的围棋对弈程序：**KataGo 驱动的三档 AI**、实时 AI 推荐
 与形势判断、读秒计时、悔棋、自动保存 SGF 棋谱与 AI 深度复盘——全部在你的
 机器上运行，无需账号，配置完成后不依赖网络。
 
@@ -98,11 +98,10 @@
 │       ├── audio.ts        落子声（WebAudio 合成，零音频资源）
 │       ├── api.ts          REST 封装 + WebSocket 事件总线（自动重连）
 │       ├── types.ts        与后端对应的 DTO
-│       ├── style.css       设计系统（暖木金 × 深褐 token）
+│       ├── style.css       设计系统（深色主题 token）
 │       └── screens/        menu.ts · play.ts · review.ts
 ├── records/                棋谱：YYYY-MM-DD/NNN-结果.sgf（+ .analysis.json）
-├── docs/licenses/          KataGo 引擎与网络许可文本、第三方清单
-└── design/                 已确认的 UI 设计稿（ui-mockup.html）
+└── docs/licenses/          KataGo 引擎与网络许可文本、第三方清单
 ```
 
 ### 一手棋的完整路径

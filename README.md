@@ -2,12 +2,12 @@
 
 [English](README.md) · [中文](README.zh-CN.md)
 
-A local Go (weiqi/baduk) game with a photoreal wooden board, a **KataGo-powered AI**
-with three strength levels, live AI hints and territory estimation,
+A local Go (weiqi/baduk) game with a **KataGo-powered AI**
+offering three strength levels, live AI hints and territory estimation,
 byo-yomi clocks, undo, automatic SGF saving and AI deep review — all running
 on your own machine, no account, no network required after setup.
 
-![UI](https://img.shields.io/badge/UI-%E6%8B%9F%E7%9C%9F%E6%9C%A8%E7%BA%B9%E6%A3%8B%E7%9B%98-gold) ![Engine](https://img.shields.io/badge/AI-KataGo%20b18c384nbt-blue) ![License](https://img.shields.io/badge/license-MIT-green)
+![Engine](https://img.shields.io/badge/AI-KataGo%20b18c384nbt-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## ✨ Features
 
@@ -105,11 +105,10 @@ on your own machine, no account, no network required after setup.
 │       ├── audio.ts        Stone "clack" synthesized via WebAudio (no assets)
 │       ├── api.ts          REST helper + WebSocket bus with auto-reconnect
 │       ├── types.ts        DTOs mirroring the backend
-│       ├── style.css       Design system (warm-wood-on-dark tokens)
+│       ├── style.css       Design system (dark-theme tokens)
 │       └── screens/        menu.ts · play.ts · review.ts
 ├── records/                Saved games: YYYY-MM-DD/NNN-Result.sgf (+ .analysis.json)
-├── docs/licenses/          KataGo engine & network license texts, third-party notices
-└── design/                 The approved UI mockup (ui-mockup.html)
+└── docs/licenses/          KataGo engine & network license texts, third-party notices
 ```
 
 ### How a move travels
