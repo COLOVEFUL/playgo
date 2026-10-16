@@ -37,8 +37,9 @@ class AppState:
         self.clients: set[WebSocket] = set()
         self.ticker: asyncio.Task | None = None
         self._ai_task: asyncio.Task | None = None
-        self._hint_cache: tuple[int, Analysis] | None = None  # (手数, 分析)
-        self._terr_cache: tuple[int, Analysis] | None = None
+        # 缓存键为完整着法序列（悔棋重下同手数也会失效），值为分析结果
+        self._hint_cache: tuple[tuple[tuple[int, int | None], ...], Analysis] | None = None
+        self._terr_cache: tuple[tuple[tuple[int, int | None], ...], Analysis] | None = None
         self.review_jobs: dict[str, dict] = {}  # file -> {progress, done, ...}
 
     async def broadcast(self, event: dict) -> None:
@@ -139,26 +140,27 @@ class AppState:
     async def analyze_current(
         self, *, visits: int | None = None, territory: bool = False
     ) -> Analysis | None:
-        """分析当前局面（带手数缓存）。visits=None 时按用途取默认。"""
+        """分析当前局面（按完整着法序列缓存）。visits=None 时按用途取默认。"""
         g = self.game
         if not g:
             return None
         engine = await self.engine.ensure_started()
         gpu = engine.is_gpu
+        sig = tuple((m.color, m.point) for m in g.moves)
         if territory:
             v = visits or (settings.TERRITORY_VISITS if gpu else settings.TERRITORY_VISITS_CPU)
             cache = self._terr_cache
         else:
             v = visits or (settings.HINT_VISITS if gpu else settings.HINT_VISITS_CPU)
             cache = self._hint_cache
-        if cache and cache[0] == len(g.moves):
+        if cache and cache[0] == sig:
             return cache[1]
-        moves = [(m.color, m.point) for m in g.moves]
+        moves = list(sig)
         ana = await engine.analyze(moves, to_move=g.to_play, max_visits=v)
         if territory:
-            self._terr_cache = (len(g.moves), ana)
+            self._terr_cache = (sig, ana)
         else:
-            self._hint_cache = (len(g.moves), ana)
+            self._hint_cache = (sig, ana)
         return ana
 
 

@@ -186,11 +186,26 @@ async function doResign(): Promise<void> {
 }
 
 // ── AI 推荐 / 形势判断 ──
+/** 是否轮到"人"落子（人机模式下 AI 回合不显示推荐） */
+function isHumanTurn(): boolean {
+  if (!state || state.status !== "playing") return false;
+  return state.mode !== "ai" || state.to_play === state.human_color;
+}
+
+function clearHints(): void {
+  hintMoveCount = -1;
+  board.setHints(null);
+  els.hintText.innerHTML = "等待您行棋时显示";
+  const pct = els.hintText.parentElement!.querySelector(".pct");
+  if (pct) pct.textContent = "—";
+}
+
 async function fetchHint(): Promise<void> {
-  if (!state || state.status !== "playing") return;
+  if (!state || state.status !== "playing" || !isHumanTurn()) return;
   try {
     const h = await api<HintData>("/api/game/hint");
-    if (!hintOn || h.move_count !== state.moves.length) return;
+    // 响应到达时局面或轮次已变 → 丢弃
+    if (!hintOn || !state || h.move_count !== state.moves.length || !isHumanTurn()) return;
     hintMoveCount = h.move_count;
     board.setHints(h.moves);
     if (h.moves.length) {
@@ -224,7 +239,10 @@ function updateWinrate(wrBlack: number, lead: number): void {
   els.wrFill.style.width = `${pct}%`;
   els.wrLead.textContent =
     Math.abs(lead) < 1 ? "均势" : lead > 0 ? `黑优 ${lead.toFixed(1)} 目` : `白优 ${(-lead).toFixed(1)} 目`;
-  winrateHist.push({ n: state?.moves.length ?? 0, wr: wrBlack });
+  // 每个手数只保留一个点：替换同手数记录，丢弃悔棋后多余的更高手数
+  const n = state?.moves.length ?? 0;
+  winrateHist = winrateHist.filter((p) => p.n < n);
+  winrateHist.push({ n, wr: wrBlack });
   drawWinrateCurve();
 }
 
@@ -266,9 +284,22 @@ function drawWinrateCurve(): void {
 }
 
 // ── 状态应用 ──
+let gameId: string | null = null;
+
 function applyState(s: GameState, force = false): void {
   const prev = state;
   state = s;
+
+  // 换了新对局：清空全部派生数据（胜率历史/覆盖层）
+  if (s.id !== gameId) {
+    gameId = s.id;
+    winrateHist = [];
+    hintMoveCount = -1;
+    terrMoveCount = -1;
+    board.setHints(null);
+    board.setTerritory(null);
+    drawWinrateCurve();
+  }
 
   if (board.size !== s.size) board.setSize(s.size); // 仅尺寸变化时重置
 
@@ -339,10 +370,23 @@ function applyState(s: GameState, force = false): void {
   setBtn("btn-pass", s.status === "playing");
   setBtn("btn-resign", s.status === "playing");
 
-  // AI 推荐/形势：局面变了自动刷新
+  // AI 推荐/形势：局面一变立即撤下旧覆盖层（避免标记落在对方新子上），再按需刷新
   if (s.status === "playing") {
-    if (hintOn && hintMoveCount !== s.moves.length) void fetchHint();
-    if (terrOn && terrMoveCount !== s.moves.length) void fetchTerritory();
+    const humanTurn = isHumanTurn();
+    if (hintOn) {
+      if (!humanTurn || hintMoveCount !== s.moves.length) {
+        clearHints(); // AI 回合或局面已变：先清掉旧推荐
+      }
+      if (humanTurn && hintOn && hintMoveCount !== s.moves.length) void fetchHint();
+    }
+    if (terrOn && terrMoveCount !== s.moves.length) {
+      board.setTerritory(null);
+      terrMoveCount = -1;
+      void fetchTerritory();
+    }
+  } else {
+    // 点目/终局阶段撤下推荐
+    if (hintMoveCount !== -1) clearHints();
   }
 
   // 点目 / 结果流程

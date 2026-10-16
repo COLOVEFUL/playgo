@@ -229,10 +229,10 @@ class KataGoEngine:
         rid = uuid.uuid4().hex[:12]
         payload = {
             "id": rid,
+            # 停一手必须以 "pass" 传给引擎：丢掉会破坏黑白轮转，分析出错误局面
             "moves": [
-                ["B" if c == BLACK else "W", to_kata_coords(p, size)]
+                ["B" if c == BLACK else "W", to_kata_coords(p, size) if p is not None else "pass"]
                 for c, p in moves
-                if p is not None
             ],
             "analyzeTurns": [len(moves)],
             "maxVisits": max_visits,
