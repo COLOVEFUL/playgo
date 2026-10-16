@@ -243,7 +243,10 @@ All core flows are covered by automated tests (rules/ko/scoring/clocks) and
 were verified end-to-end in a real browser against the live engine:
 game → AI reply → hints → territory → undo → scoring → SGF save → review
 analysis. Known simplifications: single concurrent game per server session;
-board size fixed at 19×19; UI languages: Chinese.
+board size fixed at 19×19.
+
+**UI languages**: Chinese and English — follows your browser language on first
+visit, switchable anytime from the header toggle (persisted).
 
 ## 🤝 Credits
 
