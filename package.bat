@@ -18,6 +18,8 @@ xcopy /e /i /q backend\tests "%OUT%\backend\tests" >nul
 copy /y backend\pyproject.toml "%OUT%\backend\" >nul
 copy /y backend\uv.lock "%OUT%\backend\" >nul
 xcopy /e /i /q backend\engines "%OUT%\backend\engines" >nul
+rem 剔除打包机的引擎选择——发行版按用户自己已装的包推导缺省
+del /q "%OUT%\backend\engines\choice.json" >nul 2>nul
 xcopy /e /i /q frontend\dist "%OUT%\frontend\dist" >nul
 xcopy /e /i /q docs "%OUT%\docs" >nul
 copy /y start.bat "%OUT%\" >nul

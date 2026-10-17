@@ -86,6 +86,8 @@ const ERR_KEY: Record<string, MsgKey> = {
   "engine.not_ready": "err.engine_not_ready",
   "engine.analyze_timeout": "err.engine_analyze_timeout",
   "engine.not_installed": "err.engine_not_installed",
+  "engine.bad_package": "err.engine_bad_package",
+  "engine.package_not_installed": "err.engine_package_not_installed",
   "engine.all_failed": "err.engine_all_failed",
   "record.not_found": "err.record_not_found",
   "download.busy": "err.download_busy",

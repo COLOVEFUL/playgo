@@ -124,10 +124,30 @@ export interface RecordDetail {
   analysis: ReviewAnalysis | null;
 }
 
+/** 下载项（包卡片内逐项进度） */
+export interface DownloadItem {
+  id: string;
+  size_mb: number;
+}
+
+/** 引擎包视图（CPU 轻量默认 / GPU 最强可选） */
+export interface EnginePackageInfo {
+  id: string; // "cpu" | "gpu"
+  backend: string; // "eigen" | "opencl"
+  gpu: boolean;
+  model: string;
+  installed: boolean;
+  active: boolean;
+  missing: DownloadItem[];
+  size_mb: number; // missing 项体积合计
+}
+
 export interface EngineStatus {
   available: boolean;
   engine: { exe: string; model: string; backend: string; gpu: boolean } | null;
-  missing: { id: string; size_mb: number }[];
+  /** 用户选中的包（实际运行可能是回落包，见 packages[].active） */
+  selected: string;
+  packages: EnginePackageInfo[];
   downloading?: boolean;
   installed?: Record<string, boolean>;
 }

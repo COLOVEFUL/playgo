@@ -108,6 +108,11 @@ onLangChange(() => {
 // ── 引擎状态（顶栏角标 + 全局事件） ──
 export let engineStatus: EngineStatus | null = null;
 
+/** 手动刷新状态后回写全局（import 绑定只读，经此更新） */
+export function setEngineStatus(s: EngineStatus): void {
+  engineStatus = s;
+}
+
 onWs((ev: WsEvent) => {
   switch (ev.type) {
     case "engine":
@@ -121,9 +126,10 @@ onWs((ev: WsEvent) => {
   onGameEvent(ev);
 });
 
-// 初始拉取
+// 初始拉取（成功后刷新菜单，启动早期没赶上预热广播时引擎面板也能渲染）
 void api<EngineStatus>("/api/engines/status").then((s) => {
   engineStatus = s;
+  void refreshMenu();
 });
 
 updateHeader();

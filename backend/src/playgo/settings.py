@@ -38,6 +38,45 @@ URL_STRONG_MODEL = (
 )
 STRONG_MODEL_NAME = "kata1-b18c384nbt.bin.gz"
 
+# CPU 轻量网络：官方 Extra Networks 的 lionffen b6c64（约 2MB，19x19 专用，
+# 强度约等于历史 10 层网络）。保留 .txt.gz 真实扩展名——官方即旧格式。
+URL_LITE_MODEL = (
+    "https://media.katagotraining.org/uploaded/networks/models_extra/"
+    "lionffen_b6c64_3x3_v10.txt.gz"
+)
+LITE_MODEL_NAME = "lionffen_b6c64.txt.gz"
+
+
+@dataclass(frozen=True)
+class EnginePackage:
+    """一个可选择的引擎包：后端 exe + 配套网络 + 所需下载项 id。"""
+
+    id: str  # "cpu" | "gpu"
+    backend: str  # "eigen" | "opencl"
+    exe: Path
+    model: Path
+    items: tuple[str, ...]  # downloader._items() 的 id
+
+
+# 引擎分包：CPU 包默认（Eigen + 轻量网络，下载约 8MB，无显卡也流畅）；
+# GPU 包按需（OpenCL + 强网络，下载约 100MB，需独立显卡）。
+PACKAGES: dict[str, EnginePackage] = {
+    "cpu": EnginePackage(
+        "cpu",
+        "eigen",
+        BUNDLED_DIR / "eigen" / "katago.exe",
+        DOWNLOADED_DIR / LITE_MODEL_NAME,
+        ("eigen-exe", "lite-model"),
+    ),
+    "gpu": EnginePackage(
+        "gpu",
+        "opencl",
+        DOWNLOADED_DIR / "opencl" / "katago.exe",
+        DOWNLOADED_DIR / STRONG_MODEL_NAME,
+        ("opencl-exe", "strong-model"),
+    ),
+}
+
 
 @dataclass(frozen=True)
 class TimeSettings:

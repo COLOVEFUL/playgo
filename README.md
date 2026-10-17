@@ -66,7 +66,9 @@ on your own machine, no account, no network required after setup.
 │  │ clocks,     │  └──────┬───────┘  │  extract, progress │    │
 │  │ byo-yomi,   │         │          └────────────────────┘    │
 │  │ undo        │  katago.exe analysis (subprocess)            │
-│  └────────────┘  OpenCL (GPU) ▸ Eigen (CPU) fallback          │
+│  └────────────┘  Engine packages: CPU lite (default) /        │
+│                  GPU strongest (optional); startup falls back │
+│                  to the other installed package on failure    │
 │                                                                │
 │  sgf.py (SGF read/write)   settings.py (presets & URLs)       │
 │  records/ (SGF + analysis cache)   ticker task (clock → WS)   │
@@ -93,12 +95,15 @@ on your own machine, no account, no network required after setup.
 │   │   │                   auto dead-stone detection, review batch analysis
 │   │   ├── downloader.py   On-demand engine/model download with progress callbacks
 │   │   ├── sgf.py          SGF (FF4) writer/parser + records library
-│   │   └── settings.py     Time presets, difficulty table, official download URLs
-│   ├── tests/              36 tests: rules, ko, scoring, clocks/byo-yomi timeout,
-│   │                       engine normalization (black-perspective)
+│   │   └── settings.py     Time presets, difficulty table, engine-package
+│   │                       registry, official download URLs
+│   ├── tests/              45 tests: rules, ko, scoring, clocks/byo-yomi timeout,
+│   │                       engine normalization (black-perspective),
+│   │                       engine-package selection & defaulting
 │   └── engines/            Runtime home of katago.exe + networks (git-ignored)
-│       ├── bundled/eigen/    CPU engine (fallback)
-│       └── downloaded/       OpenCL engine + strong network (preferred)
+│       ├── bundled/eigen/    CPU engine (cpu package component)
+│       ├── downloaded/       GPU engine + strong/lite networks
+│       └── choice.json       User's package choice (written on explicit switch)
 ├── frontend/               TypeScript + Vite (no runtime framework)
 │   └── src/
 │       ├── board.ts        Canvas renderer: flat kaya-toned board, gradient stones,
@@ -139,7 +144,7 @@ on your own machine, no account, no network required after setup.
 
 REST: `GET /api/state` · `POST /api/game/new|move|pass|resign|undo|dead-stones|confirm-score` ·
 `GET /api/game/hint|territory` · `GET /api/records[/{file}]` · `POST /api/review/analyze` ·
-`GET /api/engines/status` · `POST /api/engines/download`
+`GET /api/engines/status` · `POST /api/engines/download` · `POST /api/engines/select`
 
 WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
 `review_progress|done|error`, `error`.
@@ -149,7 +154,7 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
 | Layer | Choice | Why |
 |---|---|---|
 | Backend | **Python 3.11+ / FastAPI / uvicorn** | subprocess management and async I/O for the engine pipes; typed request models; first-class WebSocket |
-| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** (36 tests) | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
+| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** (45 tests) | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
 | Frontend | **TypeScript + Canvas 2D, Vite** | a Go board is one big custom-drawn surface; no framework overhead (~40 KB gz), full control of rendering, DPR-correct drawing |
 | Charts | hand-rolled canvas lines, colors validated for CVD | the win-rate curve is one diverging series; a charting library would outweigh it |
 | Audio | WebAudio synthesis | zero audio assets to license or ship |
@@ -177,13 +182,16 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
 - **Dead-stone detection** at scoring reuses the analysis `ownership` vector:
   stones sitting on points owned by the opponent beyond a threshold are
   proposed as dead; the player can override by clicking.
-- The engine (v1.18.1, OpenCL build for GPUs / Eigen for CPU) and the
-  `kata1-b18c384nbt` network are downloaded **from official sources only**
-  (GitHub releases · katagotraining.org) on first use, with progress shown
-  in-app; GPU is auto-preferred with CPU fallback. The server warms the
-  engine at startup, absorbing first-run OpenCL tuning (~a minute, cached
-  afterwards); query timeouts scale with difficulty and a wedged engine
-  instance is restarted and retried automatically.
+- Engine packages (v1.18.1) and networks are downloaded **from official sources
+  only** (GitHub releases · katagotraining.org): the **CPU lite package is the
+  default** (Eigen + lionffen_b6c64 lightweight net, ~8 MB — plays smoothly
+  without a GPU), while the **GPU strongest package is optional** (OpenCL +
+  `kata1-b18c384nbt` strong net, ~100 MB), downloaded in-app on demand and
+  switchable at any time; a selected GPU package that fails to start falls back
+  to the installed CPU package. The server warms the engine at startup,
+  absorbing first-run OpenCL tuning (~a minute, cached afterwards); query
+  timeouts scale with difficulty and a wedged engine instance is restarted and
+  retried automatically.
 - Other open-source components and their licenses are inventoried in
   [docs/licenses/THIRD-PARTY-NOTICES.md](docs/licenses/THIRD-PARTY-NOTICES.md).
 
@@ -225,10 +233,19 @@ uv run uvicorn playgo.main:app --host 127.0.0.1 --port 8900
 
 ### First-run engine setup
 
-With no engine present, open **主菜单 → 引擎状态 → 下载增强引擎**, pick the
-items (GPU engine 6 MB · CPU engine 6 MB · strong network 94 MB) and watch the
-progress bars. Downloads land in `backend/engines/` and persist. If you skip
-this, AI features will prompt for it when first needed.
+With no engine present, the menu's engine panel shows two **engine-package
+cards** to download and switch between:
+
+- **CPU Lite (default)** — Eigen engine + lionffen_b6c64 lightweight net,
+  ~8 MB. The recommended choice for computers without a GPU: small download,
+  responsive play.
+- **GPU Strongest (optional)** — OpenCL engine + b18c384nbt strong net,
+  ~100 MB. Requires a dedicated GPU; activates automatically once downloaded.
+
+Downloads land in `backend/engines/` and persist. Any fully-installed package
+can be switched to at any time with one click (the engine process restarts;
+switching mid-game is safe). If you skip downloading, AI features will prompt
+for it when first needed.
 
 To distribute a fully offline copy: run the downloads once, then
 `package.bat` → `dist-app/PlayGo` (engines and license texts included).

@@ -3,8 +3,8 @@
 import { api, onWs } from "../api";
 import { errPayloadText, errText, t } from "../i18n";
 import type { MsgKey } from "../i18n";
-import type { EngineStatus, GameState, RecordItem } from "../types";
-import { closeDialog, engineStatus, showDialog, showScreen, toast } from "../main";
+import type { EnginePackageInfo, EngineStatus, GameState, RecordItem } from "../types";
+import { closeDialog, engineStatus, setEngineStatus, showDialog, showScreen, toast } from "../main";
 
 // 选项表携带字面量键，渲染期再 t()（语言切换后可重渲染）
 const DIFFS: { id: string; labelKey: MsgKey; noteKey: MsgKey }[] = [
@@ -27,6 +27,24 @@ const DIFF_KEY: Record<string, MsgKey> = {
 
 let sel = { mode: "ai", diff: "medium", color: 1, time: "standard" };
 let panelMode: "engine" | "records" = "engine";
+
+// 引擎包卡片：包内下载项 → 标签键（渲染期 t()，语言切换可重建）
+const PKG_ITEMS: Record<string, { id: string; labelKey: MsgKey }[]> = {
+  cpu: [
+    { id: "eigen-exe", labelKey: "dl.eigen" },
+    { id: "lite-model", labelKey: "dl.lite_model" },
+  ],
+  gpu: [
+    { id: "opencl-exe", labelKey: "dl.opencl" },
+    { id: "strong-model", labelKey: "dl.strong_model" },
+  ],
+};
+const PKG_TITLE: Record<string, MsgKey> = {
+  cpu: "pkg.cpu_title",
+  gpu: "pkg.gpu_title",
+};
+
+let switching: string | null = null; // 切换中的包 id（按钮转"切换中…"并禁用）
 
 export function initMenu(): void {
   const root = document.getElementById("screen-menu")!;
@@ -60,6 +78,37 @@ export function initMenu(): void {
   document.getElementById("card-records")!.addEventListener("click", () => showRecords());
 }
 
+/** 单张引擎包卡片：标题/描述 + 动作按钮（使用中/切换/下载）+ 缺失项进度行 */
+function renderPkgCard(p: EnginePackageInfo, downloading: boolean): string {
+  const items = PKG_ITEMS[p.id] ?? [];
+  const labelOf = (id: string): string => {
+    const e = items.find((x) => x.id === id);
+    return e ? t(e.labelKey) : id;
+  };
+  const action = p.active
+    ? `<span class="chip">${t("pkg.active")}</span>`
+    : p.installed
+      ? `<button class="btn" data-switch="${p.id}" style="padding:7px 16px;font-size:12px"${
+          switching === p.id ? " disabled" : ""
+        }>${switching === p.id ? t("pkg.switching") : t("pkg.switch")}</button>`
+      : `<button class="btn primary" data-dl="${p.id}" style="padding:7px 16px;font-size:12px"${
+          downloading ? " disabled" : ""
+        }>${t("pkg.download", { n: p.size_mb })}</button>`;
+  return `
+    <div class="pkg-card${p.active ? " active" : ""}" data-pkg="${p.id}">
+      <div class="pkg-head"><b>${t(p.gpu ? "pkg.gpu_title" : "pkg.cpu_title")}</b>${action}</div>
+      <p class="pkg-desc">${t(p.gpu ? "pkg.gpu_desc" : "pkg.cpu_desc")}</p>
+      ${p.missing
+        .map(
+          (m) => `<div class="dl-row" data-id="${m.id}">
+        <div class="label"><span>${labelOf(m.id)} (${m.size_mb}MB)</span><span class="pct-label"></span></div>
+        <div class="progress"><i></i></div>
+      </div>`,
+        )
+        .join("")}
+    </div>`;
+}
+
 export async function refreshMenu(focus?: string): Promise<void> {
   panelMode = focus === "records" ? "records" : focus ? "engine" : panelMode;
   // 继续对局卡片
@@ -85,27 +134,70 @@ export async function refreshMenu(focus?: string): Promise<void> {
     } else {
       slot.innerHTML = "";
     }
-    // 引擎状态行
+    // 引擎状态行 + 双包卡片（CPU 默认轻量 / GPU 最强可选）
     const es = engineStatus ?? st.engine;
     const eng = es?.engine;
-    const missing = es?.missing ?? [];
     const engLine = eng
       ? t("menu.engine_ready", {
           backend: t(eng.gpu ? "engine.opencl" : "engine.eigen"),
           model: eng.model,
         })
       : `<span style="color:#e8a04c">${t("menu.engine_not_ready")}</span>`;
+    // 选中包 ≠ 实际运行包 → 选中包启动失败已回落
+    const activePkg = es?.packages.find((p) => p.active);
+    const fallback =
+      es && activePkg && activePkg.id !== es.selected
+        ? `<span style="font-size:12px;color:#e8a04c">${t("menu.engine_fallback", {
+            sel: t(PKG_TITLE[es.selected] ?? "pkg.gpu_title"),
+            cur: t(PKG_TITLE[activePkg.id] ?? "pkg.cpu_title"),
+          })}</span>`
+        : "";
+    const pkgs = es?.packages ?? [];
+    const downloading = es?.downloading ?? false;
     panel.innerHTML = `
-      <div class="sec" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-        <span style="font-size:12.5px">${engLine}</span>
-        <div style="flex:1"></div>
-        ${missing.length ? `<button class="btn primary" id="btn-dl" style="padding:7px 16px;font-size:12px">${t("menu.download_btn")}</button>` : ""}
-        <button class="btn" id="btn-recheck" style="padding:7px 16px;font-size:12px">${t("menu.refresh")}</button>
+      <div class="sec">
+        <div class="eng-line">
+          <span style="font-size:12.5px">${engLine}</span>
+          ${fallback}
+          <div style="flex:1"></div>
+          <button class="btn" id="btn-recheck" style="padding:7px 16px;font-size:12px">${t("menu.refresh")}</button>
+        </div>
+        <div class="pkg-cards">${pkgs.map((p) => renderPkgCard(p, downloading)).join("")}</div>
       </div>`;
-    const dl = document.getElementById("btn-dl");
-    if (dl) dl.addEventListener("click", showDownload);
+    panel.querySelectorAll<HTMLButtonElement>("[data-switch]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const id = b.dataset.switch!;
+        switching = id;
+        b.disabled = true;
+        b.textContent = t("pkg.switching");
+        try {
+          await api("/api/engines/select", { id });
+          // engine_restarted 广播触发 refreshMenu；finally 兜底再刷一次
+        } catch (e) {
+          toast(errText(e), true);
+        } finally {
+          switching = null;
+          void refreshMenu();
+        }
+      }),
+    );
+    panel.querySelectorAll<HTMLButtonElement>("[data-dl]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        const pkg = pkgs.find((x) => x.id === b.dataset.dl);
+        if (!pkg) return;
+        try {
+          await api("/api/engines/download", { ids: pkg.missing.map((m) => m.id) });
+          toast(t("dl.started"));
+        } catch (e) {
+          toast(errText(e), true);
+        }
+      }),
+    );
     document.getElementById("btn-recheck")!.addEventListener("click", () => {
-      void api<EngineStatus>("/api/engines/status").then(() => refreshMenu());
+      void api<EngineStatus>("/api/engines/status").then((s) => {
+        setEngineStatus(s);
+        void refreshMenu();
+      });
     });
   } catch {
     /* 后端未就绪 */
@@ -226,42 +318,7 @@ async function showRecords(): Promise<void> {
   );
 }
 
-// ── 引擎下载 ──
-function showDownload(): void {
-  const es = engineStatus;
-  const all: { id: string; labelKey: MsgKey; descKey: MsgKey }[] = [
-    { id: "strong-model", labelKey: "dl.strong_model", descKey: "dl.model_desc" },
-    { id: "opencl-exe", labelKey: "dl.opencl", descKey: "dl.opencl_desc" },
-    { id: "eigen-exe", labelKey: "dl.eigen", descKey: "dl.eigen_desc" },
-  ];
-  const items = all.filter((x) => !(es?.installed ?? {})[x.id]);
-  const d = showDialog(`
-    <h2>${t("dl.title")}</h2>
-    <div class="body">
-      ${t("dl.desc")}
-      ${items.map(
-        (x) => `<div class="dl-row" data-id="${x.id}">
-        <div class="label"><span><b>${t(x.labelKey)}</b><br><small style="color:var(--ink-dim)">${t(x.descKey)}</small></span><span class="pct-label"></span></div>
-        <div class="progress"><i></i></div>
-      </div>`,
-      ).join("")}
-    </div>
-    <div class="actions">
-      <button class="btn" id="dlg-cancel">${t("dl.close")}</button>
-      <button class="btn primary" id="dlg-dl">${t("dl.download_all", { n: items.length })}</button>
-    </div>`);
-  d.querySelector("#dlg-cancel")!.addEventListener("click", closeDialog);
-  d.querySelector("#dlg-dl")!.addEventListener("click", async () => {
-    try {
-      await api("/api/engines/download", { ids: items.map((x) => x.id) });
-      toast(t("dl.started"));
-    } catch (e) {
-      toast(errText(e), true);
-    }
-  });
-}
-
-// WS 下载进度 → 更新弹层内对应行（模块顶层注册一次）
+// WS 下载进度 → 更新包卡片内对应行（模块顶层注册一次）
 onWs((ev) => {
   if (ev.type !== "download") return;
   const row = document.querySelector(`.dl-row[data-id="${ev.id}"]`);

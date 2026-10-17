@@ -8,6 +8,7 @@ AI 推荐（top-N 候选）、形势判断（ownership 热力）、复盘批量�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
 from playgo import settings
+from playgo.downloader import installed, item_size
 from playgo.errors import PlayGoError
 from playgo.rules import BLACK
 
@@ -372,53 +374,96 @@ class KataGoEngine:
         return chosen["point"]
 
 
+# ── 引擎包选择持久化（backend/engines/choice.json）──────────────────
+# 只在用户显式切换时写入；缺省选择按磁盘已装包推导（GPU 装全→gpu，否则 cpu），
+# 于是"全新装机下载完 GPU 包"时推导默认自然翻转为 gpu，即下载后自动切换。
+
+
+def _choice_path() -> Path:
+    return settings.ENGINES_DIR / "choice.json"
+
+
+def read_choice() -> str | None:
+    """读取用户显式选择的引擎包 id；无文件/损坏/非法值 → None（不回写）。"""
+    try:
+        data = json.loads(_choice_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("engine")
+    return value if value in settings.PACKAGES else None
+
+
+def write_choice(pkg_id: str) -> None:
+    """原子写入用户选择（tmp + replace；Windows 下 rename 不覆盖已存在目标）。"""
+    path = _choice_path()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"engine": pkg_id}, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _pkg_installed(pkg: settings.EnginePackage) -> bool:
+    """包是否装全（exe 与配套网络都在；文件即事实，与下载器幂等判定一致）。"""
+    return pkg.exe.exists() and pkg.model.exists()
+
+
+def _default_choice() -> str:
+    """缺省选择：老环境（GPU 包已装全）保持 GPU 体验不变，全新装机默认 CPU 轻量包。"""
+    return "gpu" if _pkg_installed(settings.PACKAGES["gpu"]) else "cpu"
+
+
 class EngineManager:
-    """选择并持有当前最佳可用引擎；负责按需下载的启动探测。"""
+    """持有当前引擎包对应的引擎进程；启动顺序 = 用户选择优先，另一已装包兜底。"""
 
     def __init__(self) -> None:
         self.engine: KataGoEngine | None = None
         self._starting: asyncio.Task | None = None
+        self.selected_id: str = read_choice() or _default_choice()
+        self._restart_lock = asyncio.Lock()
 
-    def _candidates(self) -> list[KataGoEngine]:
-        """按优先级列出可用引擎（文件存在即算）。"""
-        cands: list[KataGoEngine] = []
-        opencl = settings.DOWNLOADED_DIR / "opencl" / "katago.exe"
-        model = settings.DOWNLOADED_DIR / settings.STRONG_MODEL_NAME
-        if opencl.exists() and model.exists():
-            cands.append(KataGoEngine(opencl, model, "opencl"))
-        eigen = settings.BUNDLED_DIR / "eigen" / "katago.exe"
-        if eigen.exists() and model.exists():
-            cands.append(KataGoEngine(eigen, model, "eigen"))
+    def _ordered_packages(self) -> list[settings.EnginePackage]:
+        """启动候选包：选中包优先，另一包仅在装全时兜底（如无 OpenCL 设备回落 CPU）。"""
+        selected = settings.PACKAGES[self.selected_id]
+        other = settings.PACKAGES["cpu" if selected.id == "gpu" else "gpu"]
+        cands = [selected]
+        if other.id != selected.id and _pkg_installed(other):
+            cands.append(other)
         return cands
 
-    def missing_for_download(self) -> list[dict]:
-        """列出可下载补齐项（label 由前端按 id 本地化）。"""
-        need = []
-        model = settings.DOWNLOADED_DIR / settings.STRONG_MODEL_NAME
-        opencl = settings.DOWNLOADED_DIR / "opencl" / "katago.exe"
-        eigen = settings.BUNDLED_DIR / "eigen" / "katago.exe"
-        if not model.exists():
-            need.append({"id": "strong-model", "size_mb": 94})
-        if not opencl.exists():
-            need.append({"id": "opencl-exe", "size_mb": 6})
-        if not eigen.exists():
-            need.append({"id": "eigen-exe", "size_mb": 6})
-        return need
+    def _package_view(self, pkg: settings.EnginePackage) -> dict:
+        """单包状态视图（缺失项 + 汇总量，供前端渲染包卡片）。"""
+        missing = [
+            {"id": i, "size_mb": item_size(i)} for i in pkg.items if not installed(i)
+        ]
+        return {
+            "id": pkg.id,
+            "backend": pkg.backend,
+            "gpu": pkg.backend == "opencl",
+            "model": pkg.model.name,
+            "installed": _pkg_installed(pkg),
+            "active": bool(self.engine and self.engine.backend == pkg.backend),
+            "missing": missing,
+            "size_mb": sum(m["size_mb"] for m in missing),
+        }
 
     def status(self) -> dict:
         return {
             "available": self.engine.ready if self.engine else False,
             "engine": self.engine.describe() if self.engine else None,
-            "missing": self.missing_for_download(),
+            "selected": self.selected_id,
+            "packages": [self._package_view(p) for p in settings.PACKAGES.values()],
         }
 
     async def ensure_started(self) -> KataGoEngine:
-        """取当前最佳引擎并启动（幂等）。无任何引擎时抛 EngineError。"""
+        """启动选中（或兜底）引擎（幂等）。无任何可用引擎时抛 EngineError。"""
         if self.engine and self.engine.ready:
             return self.engine
         if self._starting:
             return await asyncio.shield(self._starting)
-        cands = self._candidates()
+        cands = [
+            KataGoEngine(p.exe, p.model, p.backend)
+            for p in self._ordered_packages()
+            if _pkg_installed(p)
+        ]
         if not cands:
             msg = "未找到可用引擎，请先下载"
             raise EngineError(msg, code="engine.not_installed")
@@ -430,7 +475,7 @@ class EngineManager:
                     await cand.start()
                     self.engine = cand
                     return cand
-                except EngineError as e:  # OpenCL 失败则回退 Eigen
+                except EngineError as e:  # 选中包失败则回退另一包
                     last_err = e
                     log.warning("引擎 %s 启动失败: %s", cand.backend, e)
             msg = f"所有引擎启动失败: {last_err}"
@@ -443,13 +488,25 @@ class EngineManager:
             self._starting = None
 
     async def restart(self) -> KataGoEngine:
-        """重建引擎（引擎实例可能卡死：进程活着但对查询无响应）。"""
-        if self.engine:
-            await self.engine.stop()
-            self.engine = None
-        return await self.ensure_started()
+        """重建引擎（下载补齐文件/实例疑似卡死时）。select/_after/自愈重试共用，串行执行。"""
+        async with self._restart_lock:
+            if self._starting:
+                # 等在途启动收尾，绝不 cancel——cancel 会孤儿化半启动的子进程
+                with contextlib.suppress(BaseException):
+                    await asyncio.shield(self._starting)
+            if self.engine:
+                await self.engine.stop()
+                self.engine = None
+            return await self.ensure_started()
 
-    # ── 带自愈的查询入口：超时=引擎实例疑似卡死，重启后重试一次 ──
+    async def select(self, pkg_id: str) -> KataGoEngine:
+        """切换引擎包：持久化选择 → 停旧 → 启新（选中包启动失败回落另一已装包，
+        选择不回写撤销——保留用户意图，状态里 selected != active 供前端提示）。"""
+        write_choice(pkg_id)
+        self.selected_id = pkg_id
+        return await self.restart()
+
+    # ── 带自愈的查询入口：超时/进程退出=实例疑似卡死或被切换重启，重启后重试一次 ──
 
     async def _retry_on_wedge(self, query: Callable[[KataGoEngine], Awaitable[T]]) -> T:
         for attempt in (1, 2):
@@ -457,9 +514,9 @@ class EngineManager:
             try:
                 return await query(engine)
             except EngineError as e:
-                if e.code != "engine.analyze_timeout" or attempt == 2:
+                if e.code not in ("engine.analyze_timeout", "engine.exited") or attempt == 2:
                     raise
-                log.warning("引擎无响应，重启后重试: %s", e)
+                log.warning("引擎无响应/已退出，重启后重试: %s", e)
                 await self.restart()
         raise EngineError(msg="unreachable", code="engine.not_ready")
 

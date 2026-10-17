@@ -59,7 +59,8 @@
 │  │ 计时读秒,    │  └──────┬───────┘  │  带进度回调         │    │
 │  │ 悔棋        │         │          └────────────────────┘    │
 │  └────────────┘  katago.exe analysis（独立子进程）            │
-│                  OpenCL（GPU）▸ Eigen（CPU）自动回退           │
+│                  双引擎包：CPU 轻量（默认）/ GPU 最强（可选）  │
+│                  选中包启动失败自动回落另一已装包               │
 │                                                                │
 │  sgf.py（SGF 读写）  settings.py（预设与直链）                  │
 │  records/（棋谱+分析缓存）  ticker 任务（计时 → WS 广播）       │
@@ -86,11 +87,13 @@
 │   │   │                   自动死活判定、复盘批量分析
 │   │   ├── downloader.py   引擎/模型按需下载（进度回调 → WS）
 │   │   ├── sgf.py          SGF（FF4）写入/解析 + 棋谱库
-│   │   └── settings.py     用时预设、难度表、官方下载直链
-│   ├── tests/              36 项测试：规则/劫/点目/读秒判负/引擎黑方视角归一化
+│   │   └── settings.py     用时预设、难度表、引擎包注册表、官方下载直链
+│   ├── tests/              45 项测试：规则/劫/点目/读秒判负/引擎黑方视角
+│   │                       归一化/引擎分包选择与推导
 │   └── engines/            引擎与模型的运行时目录（git 忽略）
-│       ├── bundled/eigen/    CPU 引擎（回退）
-│       └── downloaded/       OpenCL 引擎 + 强网络（优先）
+│       ├── bundled/eigen/    CPU 引擎（cpu 轻量包组件）
+│       ├── downloaded/       GPU 引擎 + 强/轻量网络
+│       └── choice.json       用户引擎包选择（仅显式切换时写入）
 ├── frontend/               TypeScript + Vite（无运行时框架）
 │   └── src/
 │       ├── board.ts        Canvas 渲染：纯色木底、渐变质感棋子、
@@ -159,11 +162,12 @@ WS `/ws` 事件：`state`、`clocks`、`engine`、`download`、`saved`、
   `perspective` 标记，视角修复前的旧缓存自动视为未分析
 - **死活判定**复用分析的 `ownership` 向量：位于对方控制区的棋子（超阈值）
   自动标为死子，玩家可点击覆盖
-- 引擎（v1.18.1，GPU 用 OpenCL 构建 / CPU 用 Eigen）与 `kata1-b18c384nbt`
-  网络**仅从官方源下载**（GitHub Releases · katagotraining.org），首次使用
-  时应用内展示进度；GPU 优先、CPU 自动回退。服务启动即预热引擎，首日运行
-  的 OpenCL 调优（约一分钟）在预热中完成并缓存；查询超时按难度自适应，
-  引擎异常时自动重启重试
+- 引擎分包（v1.18.1）与网络**仅从官方源下载**（GitHub Releases ·
+  katagotraining.org）：**CPU 轻量包为默认**（Eigen + lionffen_b6c64 轻量网，
+  约 8MB，无显卡也流畅），**GPU 最强包可选**（OpenCL + `kata1-b18c384nbt`
+  强网络，约 100MB），应用内点击下载、随时切换。选中 GPU 启动失败自动回落
+  CPU 包。服务启动即预热引擎，首日运行的 OpenCL 调优（约一分钟）在预热中
+  完成并缓存；查询超时按难度自适应，引擎异常时自动重启重试
 - 其他开源组件及许可证清单：
   [docs/licenses/THIRD-PARTY-NOTICES.md](docs/licenses/THIRD-PARTY-NOTICES.md)
 
@@ -204,9 +208,16 @@ uv run uvicorn playgo.main:app --host 127.0.0.1 --port 8900
 
 ### 首次运行：引擎下载
 
-无引擎时进入 **主菜单 → 引擎状态 → 下载增强引擎**，按需选择
-（GPU 引擎 6 MB · CPU 引擎 6 MB · 强网络 94 MB）并查看进度。下载保存在
-`backend/engines/`，一次下载永久有效。跳过此步时，首次使用 AI 功能会提示。
+无引擎时主菜单的引擎面板会展示两张**引擎包卡片**，按需下载并切换：
+
+- **CPU 轻量版（默认）**：Eigen 引擎 + lionffen_b6c64 轻量网络，约 8 MB。
+  无显卡电脑的推荐选择，下载小、行棋快。
+- **GPU 最强版（可选）**：OpenCL 引擎 + b18c384nbt 强网络，约 100 MB。
+  需要独立显卡，棋力最强；下载完成后自动启用。
+
+下载保存在 `backend/engines/`，一次下载永久有效；已装全的包随时在卡片上
+一键切换（切换即重启引擎进程，对局中也可安全切换）。跳过下载时，首次使用
+AI 功能会提示。
 
 打包完全离线的发行版：先完成下载，再运行 `package.bat` →
 `dist-app/PlayGo`（已包含引擎与许可文本）。

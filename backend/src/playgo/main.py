@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from playgo import settings
-from playgo.downloader import DownloadError, DownloadManager, installed
+from playgo.downloader import DownloadError, DownloadManager, installed, item_ids
 from playgo.errors import err_detail, payload_of
 from playgo.game import STATUS_ENDED, STATUS_PLAYING, STATUS_SCORING, GameConfig, GameSession
 from playgo.katago import Analysis, EngineError, EngineManager
@@ -194,6 +194,10 @@ class DeadStonesReq(BaseModel):
 
 class DownloadReq(BaseModel):
     ids: list[str]
+
+
+class SelectReq(BaseModel):
+    id: str  # 引擎包 id："cpu" | "gpu"
 
 
 class ReviewReq(BaseModel):
@@ -480,7 +484,7 @@ async def review_analyze(req: ReviewReq) -> dict:
 async def engine_status() -> dict:
     st = state.engine.status()
     st["downloading"] = state.downloads.busy
-    st["installed"] = {i: installed(i) for i in ("strong-model", "opencl-exe", "eigen-exe")}
+    st["installed"] = {i: installed(i) for i in item_ids()}
     return st
 
 
@@ -497,15 +501,39 @@ async def engine_download(req: DownloadReq) -> dict:
     except DownloadError as e:
         raise HTTPException(409, err_detail(e.code, e.params)) from e
 
-    # 下载完成后自动切换到更强引擎
+    # 下载完成后重启引擎拾取新文件；选择不变（显式选择保留，
+    # 缺省选择按已装包推导——全新装机下完 GPU 包即自然切到 GPU）。
     async def _after() -> None:
         with contextlib.suppress(Exception):
             await state.downloads.task
         with contextlib.suppress(Exception):
             await state.engine.restart()
+        # 引擎重启会杀死在途查询，AI 回合可能无人再驱动——清缓存并补排一次
+        state._hint_cache = None
+        state._terr_cache = None
+        state.schedule_ai()
         await state.broadcast({"type": "engine_restarted", "engine": state.engine.status()})
 
     asyncio.create_task(_after())
+    return {"ok": True}
+
+
+@app.post("/api/engines/select")
+async def engine_select(req: SelectReq) -> dict:
+    pkg = settings.PACKAGES.get(req.id)
+    if pkg is None:
+        raise HTTPException(400, err_detail("engine.bad_package", {"id": req.id}))
+    if not (pkg.exe.exists() and pkg.model.exists()):
+        raise HTTPException(400, err_detail("engine.package_not_installed", {"id": req.id}))
+    try:
+        await state.engine.select(req.id)
+    except EngineError as e:
+        raise HTTPException(503, err_detail(e.code, e.params)) from e
+    # 新引擎的判断与旧缓存无关；若正值 AI 回合，重启后需要重新驱动
+    state._hint_cache = None
+    state._terr_cache = None
+    state.schedule_ai()
+    await state.broadcast({"type": "engine_restarted", "engine": state.engine.status()})
     return {"ok": True}
 
 

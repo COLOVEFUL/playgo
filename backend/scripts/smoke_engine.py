@@ -1,4 +1,4 @@
-"""引擎冒烟测试：启动 OpenCL → 空盘分析 → 校验符号约定与选点。
+"""引擎冒烟测试：启动引擎 → 空盘分析 → 校验符号约定与选点 → 引擎包切换往返。
 
 用法: uv run python scripts/smoke_engine.py
 """
@@ -9,8 +9,13 @@ import time
 
 sys.path.insert(0, "src")
 
-from playgo.katago import EngineManager, from_kata_coords, to_kata_coords
+from playgo import settings
+from playgo.katago import EngineManager, from_kata_coords, read_choice, to_kata_coords
 from playgo.rules import BLACK
+
+# Windows GBK 控制台打不出 ✓/✅ 等字符时的兜底
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
 
 def test_coords() -> None:
@@ -75,6 +80,32 @@ async def main() -> None:
         t0 = time.monotonic()
         pt, _ = await engine.pick_move(moves[:2], to_move=1, difficulty=diff)
         print(f"[OK] {diff} 选点 {pt} 用时 {time.monotonic() - t0:.1f}s")
+
+    # ── 引擎包切换往返：CPU 轻量包（.txt.gz 旧格式端到端加载）→ 切回 GPU ──
+    cpu_pkg, gpu_pkg = settings.PACKAGES["cpu"], settings.PACKAGES["gpu"]
+    if cpu_pkg.exe.exists() and cpu_pkg.model.exists():
+        t0 = time.monotonic()
+        engine = await mgr.select("cpu")
+        assert engine.backend == "eigen", engine.describe()
+        assert engine.model.name == settings.LITE_MODEL_NAME, engine.describe()
+        print(f"[OK] select('cpu') → {engine.describe()} 用时 {time.monotonic() - t0:.1f}s")
+        ana3 = await engine.analyze([], to_move=BLACK, max_visits=20)
+        assert 0.2 < ana3.winrate_black < 0.7, f"轻量网空盘黑胜率异常: {ana3.winrate_black}"
+        print(
+            f"[OK] 轻量网空盘分析 黑胜率={ana3.winrate_black:.3f} "
+            f"目差={ana3.score_lead_black:+.1f} visits={ana3.visits}"
+        )
+        expected = "cpu"
+        if gpu_pkg.exe.exists() and gpu_pkg.model.exists():
+            t0 = time.monotonic()
+            engine = await mgr.select("gpu")
+            assert engine.backend == "opencl", engine.describe()
+            expected = "gpu"
+            print(f"[OK] select('gpu') → {engine.describe()} 用时 {time.monotonic() - t0:.1f}s")
+        assert read_choice() == expected, f"choice.json 应为 {expected}: {read_choice()}"
+        print(f"[OK] choice.json = {read_choice()}")
+    else:
+        print("[SKIP] CPU 轻量包未装全（缺 eigen exe 或轻量网络），跳过切换测试")
 
     await mgr.shutdown()
     print("全部通过 ✅")

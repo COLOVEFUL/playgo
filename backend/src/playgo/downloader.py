@@ -21,6 +21,13 @@ def _items() -> dict[str, dict]:
             "url": settings.URL_STRONG_MODEL,
             "kind": "file",
             "dest": settings.DOWNLOADED_DIR / settings.STRONG_MODEL_NAME,
+            "size_mb": 94,
+        },
+        "lite-model": {
+            "url": settings.URL_LITE_MODEL,
+            "kind": "file",
+            "dest": settings.DOWNLOADED_DIR / settings.LITE_MODEL_NAME,
+            "size_mb": 2,
         },
         "opencl-exe": {
             "url": settings.URL_OPENCL_ZIP,
@@ -28,6 +35,7 @@ def _items() -> dict[str, dict]:
             "dest": settings.DOWNLOADED_DIR / "katago-opencl.zip",
             "extract_to": settings.DOWNLOADED_DIR / "opencl",
             "marker": settings.DOWNLOADED_DIR / "opencl" / "katago.exe",
+            "size_mb": 6,
         },
         "eigen-exe": {
             "url": settings.URL_EIGEN_ZIP,
@@ -35,8 +43,19 @@ def _items() -> dict[str, dict]:
             "dest": settings.BUNDLED_DIR / "katago-eigen.zip",
             "extract_to": settings.BUNDLED_DIR / "eigen",
             "marker": settings.BUNDLED_DIR / "eigen" / "katago.exe",
+            "size_mb": 6,
         },
     }
+
+
+def item_ids() -> list[str]:
+    """全部可下载项 id（状态接口遍历用）。"""
+    return list(_items())
+
+
+def item_size(id_: str) -> int:
+    """下载项体积（MB，供前端展示）。"""
+    return int(_items()[id_]["size_mb"])
 
 
 def installed(id_: str) -> bool:
