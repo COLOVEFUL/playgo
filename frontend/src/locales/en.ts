@@ -106,7 +106,7 @@ export const en: Record<MsgKey, string> = {
   "play.balanced": "Balanced",
   "play.black_lead": "Black +{x}",
   "play.white_lead": "White +{x}",
-  "play.hint_item": "<b>{coord}</b> · win {p}%<small>computed live by the strongest engine</small>",
+  "play.hint_item": "<b>{coord}</b> · your win rate {p}%<small>computed live by the strongest engine</small>",
   "play.hint_off": "Enable the button below to show",
   "play.hint_wait": "Shown on your turn",
   "play.undo": "Undo",

@@ -385,7 +385,9 @@ export class GoBoard {
       ctx.fillStyle = "rgba(228,192,84,.97)";
       ctx.font = `bold ${this.cell * 0.34}px Georgia,serif`;
       ctx.fillText(tag[i], x, y - 1);
-      const pct = `${(h.winrate_black * 100).toFixed(1)}%`;
+      // 数据一律黑方视角，展示换成"点推荐的玩家"视角（= 此刻行棋方，toPlay 已随状态同步）
+      const wr = this.toPlay === BLACK ? h.winrate_black : 1 - h.winrate_black;
+      const pct = `${(wr * 100).toFixed(1)}%`;
       ctx.font = `${Math.max(9, this.cell * 0.24)}px Consolas,monospace`;
       const w = ctx.measureText(pct).width + 10;
       ctx.fillStyle = "rgba(24,17,9,.85)";

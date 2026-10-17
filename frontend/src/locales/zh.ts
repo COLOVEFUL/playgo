@@ -104,7 +104,7 @@ export const zh = {
   "play.balanced": "均势",
   "play.black_lead": "黑优 {x} 目",
   "play.white_lead": "白优 {x} 目",
-  "play.hint_item": "<b>{coord}</b> · 胜率 {p}%<small>由最高棋力引擎实时计算</small>",
+  "play.hint_item": "<b>{coord}</b> · 我方胜率 {p}%<small>由最高棋力引擎实时计算</small>",
   "play.hint_off": "开启下方按钮后显示",
   "play.hint_wait": "等待您行棋时显示",
   "play.undo": "悔 棋",

@@ -245,9 +245,11 @@ async function fetchHint(): Promise<void> {
     if (h.moves.length) {
       const m = h.moves[0];
       const coord = coordName(m.point, state.size);
+      // 胜率按玩家棋色显示：推荐只在轮到该玩家时出现，视角即推荐局面的行棋方
+      const myWr = h.to_play === BLACK ? m.winrate_black : 1 - m.winrate_black;
       els.hintText.innerHTML = t("play.hint_item", {
         coord,
-        p: (m.winrate_black * 100).toFixed(1),
+        p: (myWr * 100).toFixed(1),
       });
       els.hintText.parentElement!.querySelector(".pct")!.textContent = coord;
     }

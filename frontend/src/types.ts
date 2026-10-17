@@ -66,13 +66,13 @@ export interface GameState {
 
 export interface HintMove {
   point: number;
-  winrate_black: number;
+  winrate_black: number; // 黑方视角（落该手后）；展示按玩家棋色（= to_play）翻转
   score_lead_black: number;
   order: number;
 }
 
 export interface HintData {
-  to_play: number;
+  to_play: number; // 推荐局面的行棋方 = 请求推荐的玩家，胜率展示视角
   move_count: number;
   winrate_black: number;
   score_lead_black: number;

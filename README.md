@@ -25,7 +25,8 @@ on your own machine, no account, no network required after setup.
   when it expires mid-turn (several can burn in one turn); loss when they run
   out (presets: 5:00 / 60:00 / free)
 - **Undo** — 1 move in PvP; in AI mode back to your previous turn (Ctrl+Z)
-- **AI hint** — top-3 candidate moves with win rates, always computed by the
+- **AI hint** — top-3 candidate moves with win rates shown from *your* side's
+  view (playing White no longer shows Black's number), always computed by the
   strongest available engine, toggleable
 - **Territory estimation** — per-point ownership heatmap + win rate / score lead
 - **Auto-save** — finished games are written as SGF under `records/`
