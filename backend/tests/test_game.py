@@ -51,6 +51,49 @@ def test_timeout_byo_yomi():
     assert g.result["sgf_result"] == "W+T"
 
 
+def test_byo_period_refreshes_each_turn():
+    """读秒周期每回合刷新：读秒内落子作废当前周期，下回合重新满额。"""
+    ts = settings.TimeSettings(main_seconds=1, byo_seconds=2, byo_periods=3)
+    g = GameSession(GameConfig(time=ts))
+    clock = g.clocks[BLACK]
+    clock.in_byo = True  # 直接置入读秒：本回合已用 0.5s，周期剩 1.5s
+    clock.main = 0.0
+    clock.byo_left = 1.5
+    g._turn_started = time.monotonic() - 0.5
+    g.play(BLACK, 3 * 19 + 3)
+    # 未超时落子 → 不扣周期，且周期作废重置回满额（而非结转剩余 1.0s）
+    assert clock.periods_left == 3
+    assert clock.byo_left == 2.0
+    assert g.moves[-1].clock_left == 2.0  # 落子后剩余时间即满额周期
+    # 白方回一手后再次轮到黑：黑从满额周期起算
+    g.play(WHITE, 15 * 19 + 15)
+    assert g.clocks[BLACK].byo_left == 2.0
+
+
+def test_byo_multi_periods_in_one_turn():
+    """同一回合可连续超时多次：每次扣一个周期，最后一个周期耗尽判负。"""
+    ts = settings.TimeSettings(main_seconds=1, byo_seconds=2, byo_periods=3)
+    g = GameSession(GameConfig(time=ts))
+    clock = g.clocks[BLACK]
+    clock.in_byo = True
+    clock.main = 0.0
+    clock.byo_left = 2.0
+    g._turn_started = time.monotonic() - 3.0  # 本手耗时 > 周期长
+    assert g.tick()  # 第 1 次超时：扣 1 周期，重置满额，本回合继续
+    assert clock.periods_left == 2
+    assert clock.byo_left == 2.0
+    assert g.status == "playing"
+    g._turn_started = time.monotonic() - 3.0
+    assert g.tick()  # 第 2 次
+    assert clock.periods_left == 1
+    assert g.status == "playing"
+    g._turn_started = time.monotonic() - 3.0
+    assert g.tick()  # 第 3 次 → 判负
+    assert g.status == "ended"
+    assert g.result["reason"] == "timeout"
+    assert g.result["winner"] == WHITE
+
+
 def test_resign_result_shape():
     g = GameSession(GameConfig())
     g.resign(BLACK)

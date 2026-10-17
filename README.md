@@ -20,8 +20,10 @@ on your own machine, no account, no network required after setup.
   | Medium 中等 | ~amateur 1–4 dan | medium budget + narrow sampling |
   | Hard 困难 | superhuman | 800 visits (GPU), best move |
 
-- **Clock & byo-yomi** — default 30:00 main time, then 60 s ×3 byo-yomi
-  periods, loss on expiry (presets: 5:00 / 60:00 / free)
+- **Clock & byo-yomi** — default 30:00 main time, then 60 s ×3 Japanese-style
+  byo-yomi: each turn restarts at a full period, and a period is spent only
+  when it expires mid-turn (several can burn in one turn); loss when they run
+  out (presets: 5:00 / 60:00 / free)
 - **Undo** — 1 move in PvP; in AI mode back to your previous turn (Ctrl+Z)
 - **AI hint** — top-3 candidate moves with win rates, always computed by the
   strongest available engine, toggleable
@@ -98,7 +100,7 @@ on your own machine, no account, no network required after setup.
 │   │   ├── sgf.py          SGF (FF4) writer/parser + records library
 │   │   └── settings.py     Time presets, difficulty table, engine-package
 │   │                       registry, official download URLs
-│   ├── tests/              45 tests: rules, ko, scoring, clocks/byo-yomi timeout,
+│   ├── tests/              47 tests: rules, ko, scoring, clocks/byo-yomi timeout,
 │   │                       engine normalization (black-perspective),
 │   │                       engine-package selection & defaulting
 │   └── engines/            Runtime home of katago.exe + networks (git-ignored)

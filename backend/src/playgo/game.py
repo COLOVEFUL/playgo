@@ -52,7 +52,7 @@ class PlayerClock:
         self.unlimited = ts.main_seconds <= 0
         self.main = float(ts.main_seconds)
         self.periods_left = ts.byo_periods
-        self.byo_left = float(ts.byo_seconds)
+        self.byo_left = float(ts.byo_seconds)  # 当前读秒周期剩余；每次轮到重新满额
         self.in_byo = False
 
     def snapshot(self) -> dict:
@@ -133,7 +133,11 @@ class GameSession:
             raise IllegalMove(msg, code="game.not_your_turn")
 
     def _settle_clock(self, color: int) -> float:
-        """把本手耗时结算到行棋方时钟，返回剩余秒数（无限时为 -1）。"""
+        """把本手耗时结算到行棋方时钟，返回剩余秒数（无限时为 -1）。
+
+        日本式读秒：本手在读秒内完成即作废当前周期，下次轮到本方重新满额；
+        只有周期在本回合内耗尽才扣读秒机会（同一回合可连扣多次）。
+        """
         clock = self.clocks[color]
         if clock.unlimited:
             return -1.0
@@ -153,6 +157,9 @@ class GameSession:
             if clock.byo_left < 0:
                 clock.byo_left = 0.0
                 self._consume_period(color)
+        if clock.in_byo and self.status != STATUS_ENDED:
+            # 读秒内落子 → 当前周期作废，下回合重新满额计时
+            clock.byo_left = float(self.cfg.time.byo_seconds)
         remaining = clock.byo_left if clock.in_byo else clock.main
         self._turn_started = time.monotonic()
         return max(remaining, 0.0)
