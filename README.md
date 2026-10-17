@@ -79,6 +79,7 @@ on your own machine, no account, no network required after setup.
 
 ```
 ├── start.bat               One-click launcher (build if needed → serve → open browser)
+├── dev.bat                 Debug entry (kill old instance → force frontend rebuild → serve)
 ├── package.bat             Bundles frontend+backend+engines into dist-app/ (offline-ready)
 ├── backend/                Python package (uv-managed)
 │   ├── src/playgo/
@@ -252,9 +253,21 @@ To distribute a fully offline copy: run the downloads once, then
 
 ### Development mode
 
+One-click debug entry (restart + redeploy: kills any old instance on port
+8900, force-rebuilds the frontend, starts the server; safe to run
+repeatedly):
+
+```
+double-click  dev.bat
+```
+
+Or manually, in two terminals:
+
 ```bash
-# terminal 1 — backend with autoreload
-cd backend && uv run uvicorn playgo.main:app --port 8900 --reload
+# terminal 1 — backend (do NOT add --reload: on Windows, reload mode
+# disables asyncio subprocesses and the KataGo engine cannot start;
+# restart manually after backend changes)
+cd backend && uv run uvicorn playgo.main:app --port 8900
 
 # terminal 2 — Vite dev server with /api and /ws proxied to 8900
 cd frontend && npm run dev    # http://localhost:5173

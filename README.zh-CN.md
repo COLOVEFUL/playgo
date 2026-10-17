@@ -71,6 +71,7 @@
 
 ```
 ├── start.bat               一键启动（必要时构建 → 起服务 → 开浏览器）
+├── dev.bat                 调试入口（杀旧实例 → 强制重建前端 → 起服务）
 ├── package.bat             打包发行版：前端+后端+引擎 → dist-app/（离线可玩）
 ├── backend/                Python 包（uv 管理）
 │   ├── src/playgo/
@@ -224,9 +225,19 @@ AI 功能会提示。
 
 ### 开发模式
 
+一键调试入口（重启服务 + 部署最新代码：杀掉 8900 端口旧实例、强制重建
+前端、起服务，可反复执行）：
+
+```
+双击  dev.bat
+```
+
+或手动开两个终端：
+
 ```bash
-# 终端 1 —— 后端热重载
-cd backend && uv run uvicorn playgo.main:app --port 8900 --reload
+# 终端 1 —— 后端（勿加 --reload：reload 模式在 Windows 上会禁用
+# asyncio 子进程，KataGo 引擎起不来；改代码后重启即可）
+cd backend && uv run uvicorn playgo.main:app --port 8900
 
 # 终端 2 —— Vite 开发服务器（/api 与 /ws 代理到 8900）
 cd frontend && npm run dev    # http://localhost:5173
