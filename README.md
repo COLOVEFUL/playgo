@@ -31,8 +31,10 @@ on your own machine, no account, no network required after setup.
 - **Auto-save** — finished games are written as SGF under `records/`
 - **AI review** — replay any saved game with a clickable win-rate curve,
   per-move grading (brilliant → blunder), engine suggestions, and territory replay
-- **Scoring** — after two passes the engine marks dead stones automatically;
-  you can adjust them by clicking, then confirm the area-scoring result
+- **Scoring** — after two passes, or at any moment via the **Score** button:
+  the engine marks dead stones and counts both sides with the chosen komi,
+  then asks whether you accept the verdict — confirm to end and save the game,
+  or keep playing (no moves are undone)
 
 ## 📄 License
 
@@ -88,7 +90,8 @@ on your own machine, no account, no network required after setup.
 │   │   ├── rules.py        Go rules: legal moves, captures, positional superko,
 │   │   │                   Chinese area scoring (数子法) — pure, fully unit-tested
 │   │   ├── game.py         Authoritative game state machine: turn order, per-player
-│   │   │                   clocks, byo-yomi periods, undo semantics, pass/scoring flow
+│   │   │                   clocks, byo-yomi periods, undo semantics, scoring flow
+│   │   │                   (two passes or on demand; declining resumes losslessly)
 │   │   ├── katago.py       KataGo **analysis engine** wrapper: subprocess lifecycle,
 │   │   │                   JSON-line protocol, perspective pinned to Black
 │   │   │                   (reportAnalysisWinratesAs=BLACK — winrate/scoreLead/
@@ -100,7 +103,7 @@ on your own machine, no account, no network required after setup.
 │   │   ├── sgf.py          SGF (FF4) writer/parser + records library
 │   │   └── settings.py     Time presets, difficulty table, engine-package
 │   │                       registry, official download URLs
-│   ├── tests/              47 tests: rules, ko, scoring, clocks/byo-yomi timeout,
+│   ├── tests/              51 tests: rules, ko, scoring, clocks/byo-yomi timeout,
 │   │                       engine normalization (black-perspective),
 │   │                       engine-package selection & defaulting
 │   └── engines/            Runtime home of katago.exe + networks (git-ignored)
@@ -157,7 +160,7 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
 | Layer | Choice | Why |
 |---|---|---|
 | Backend | **Python 3.11+ / FastAPI / uvicorn** | subprocess management and async I/O for the engine pipes; typed request models; first-class WebSocket |
-| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** (45 tests) | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
+| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** (51 tests) | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
 | Frontend | **TypeScript + Canvas 2D, Vite** | a Go board is one big custom-drawn surface; no framework overhead (~40 KB gz), full control of rendering, DPR-correct drawing |
 | Charts | hand-rolled canvas lines, colors validated for CVD | the win-rate curve is one diverging series; a charting library would outweigh it |
 | Audio | WebAudio synthesis | zero audio assets to license or ship |

@@ -123,6 +123,8 @@ class AppState:
         try:
             await self.engine.ensure_started()
             ana = await self.analyze_current(visits=None, territory=True)
+            if g.status != STATUS_SCORING:
+                return  # 判定期间玩家已"继续对弈"，不拉回点目
             assert ana is not None
             dead: set[int] = set()
             for p, occ in enumerate(g.board.grid):
@@ -134,7 +136,8 @@ class AppState:
             g.enter_scoring(dead)
         except EngineError as e:
             log.exception("自动点目失败: %s", e)
-            g.enter_scoring(set())  # 无引擎时手动点目
+            if g.status == STATUS_SCORING:
+                g.enter_scoring(set())  # 无引擎时手动点目
         self.emit_state()
 
     async def analyze_current(
@@ -272,6 +275,21 @@ async def pass_move() -> dict:
     return {"ok": True}
 
 
+@app.post("/api/game/score")
+async def request_score() -> dict:
+    """对弈中主动点目：引擎判定死活并给出预览（已在点目则幂等返回）。"""
+    g = _game()
+    if g.status == STATUS_ENDED:
+        raise HTTPException(400, err_detail("game.ended"))
+    if state._ai_task and not state._ai_task.done():
+        state._ai_task.cancel()  # 在途 AI 行棋作废（点目阶段其回复本就会被丢弃）
+        g.ai_thinking = False
+    if g.request_scoring():
+        state.emit_state()
+        await state.auto_scoring()
+    return {"ok": True, "score_preview": g.score_preview}
+
+
 @app.post("/api/game/resign")
 async def resign(req: ResignReq) -> dict:
     g = _game()
@@ -317,6 +335,17 @@ async def confirm_score() -> dict:
     await finalize_game()
     state.emit_state()
     return {"ok": True, "result": g.result}
+
+
+@app.post("/api/game/resume")
+async def resume_game() -> dict:
+    """拒绝点目结果，返回对弈（手数不动；若轮到 AI 则重新驱动行棋）。"""
+    g = _game()
+    if not g.resume():
+        raise HTTPException(400, err_detail("scoring.not_active"))
+    state.emit_state()
+    state.schedule_ai()
+    return {"ok": True}
 
 
 async def finalize_game() -> None:

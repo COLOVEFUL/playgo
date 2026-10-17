@@ -35,7 +35,7 @@ npx tsc --noEmit   # 仅类型检查
 
 - **单实例状态**：`main.py` 模块级 `AppState` 持有全局唯一的 `GameSession`（一次只存在一盘棋）、`EngineManager`、`DownloadManager` 与 WS 客户端集合。命令走 REST `/api/...`，状态经 `/ws` 广播（`state`/`clocks`/`engine`/`download`/`saved`/`review_*`/`error`）。
 - **一个引擎进程服务所有需求（双引擎包）**：`settings.PACKAGES` 注册两个可选包——`cpu`（Eigen + 轻量网 lionffen_b6c64，下载约 8MB，**默认**）与 `gpu`（OpenCL + kata1-b18c384nbt，约 100MB，按需下载）。选择持久化于 `backend/engines/choice.json`（**仅显式切换时写入**；缺省按磁盘推导：GPU 包已装全→gpu 否则 cpu，即"全新装机下完 GPU 包"自动切换、显式选择永远保留）。启动顺序 = 选择优先 + 另一已装包兜底（选中 GPU 启动失败回落 CPU 但**不回写**选择，状态里 `selected != active` 供前端提示）。切换走 `POST /api/engines/select`；`restart()`/`select()` 由 `_restart_lock` 串行，且绝不 cancel 在途 `_starting`（会孤儿化半启动子进程）。重启会杀死在途查询（挂起 future 收 `engine.exited`），`_retry_on_wedge` 对 `engine.exited`/`analyze_timeout` 重试一次自愈，select/下载完成钩子另补 `schedule_ai()` 防 AI 回合卡死。其余不变：spawn `katago analysis` 子进程走 stdin/stdout JSON 行协议，AI 行棋、推荐、形势、复盘只是 visits 与采样参数不同，不另起进程；启动时的预热查询（5 visits）提前触发调优并探测卡死实例，首次运行的 OpenCL 调优约 1 分钟，之后亚秒。
-- **职责分层**：`rules.py` 纯规则（提子、positional superko、中国规则数子法，全单测）；`game.py` 权威状态机（回合、双方独立计时/读秒、悔棋语义、pass 与点目流程；读秒为日本式：每次轮到重新满额计时，落子即作废当前周期，仅回合内超时才扣机会，同回合可连扣）；`sgf.py` SGF(FF4) 读写 + `records/` 棋谱库；`settings.py` 集中所有预置（难度表、用时、官方下载 URL）。
+- **职责分层**：`rules.py` 纯规则（提子、positional superko、中国规则数子法，全单测）；`game.py` 权威状态机（回合、双方独立计时/读秒、悔棋语义、点目流程；读秒为日本式：每次轮到重新满额计时，落子即作废当前周期，仅回合内超时才扣机会，同回合可连扣）；`sgf.py` SGF(FF4) 读写 + `records/` 棋谱库；`settings.py` 集中所有预置（难度表、用时、官方下载 URL）。
 - **AI 行棋竞态防护**：`schedule_ai()` 的回复在落子前重新校验当前该谁走，悔棋/新对局期间到达的回复直接丢弃。
 - **缓存键 = 完整着法序列**（非手数）：`_hint_cache`/`_terr_cache`，悔棋重下同手数也会失效。
 - **前端**：`main.ts` 路由 → `screens/menu|play|review`；`board.ts` Canvas 渲染器（动画、悬停、推荐环、归属热力、死子标记）；`api.ts` REST 封装 + WS 事件总线（自动重连）；`types.ts` 与后端 DTO 一一对应，改协议需两侧同步。
@@ -50,6 +50,7 @@ npx tsc --noEmit   # 仅类型检查
 - **i18n**：`frontend/src/i18n.ts` + `locales/zh.ts`（键权威）+ `locales/en.ts`（`Record<keyof typeof zh, string>`，tsc 强制键齐全）。`t()` 只能渲染期调用；语言切换时 `main.ts` 重建三屏并 `reapplyPlay()/reapplyReview()` 重放状态。
 - **难度实现**：`settings.DIFFICULTY_PRESETS` —— visits 上限 + `prior^p` 采样（easy/medium 走 top-k 采样制造"人味"失误，hard 取最优）；CPU 下 visits 自动降为 `cpu_visits`。难度显示文案在前端词典（`diff.*`），预设表只存参数。
 - **死活判定**复用 analysis 的 `ownership` 向量（对方地盘上的己方棋子超阈值判死），玩家可点击改判。胜负结果只传 `reason/winner/margin` 枚举数值，文案前端组合。
+- **点目两条入口，一个出口**：双停一手（`/api/game/pass`）与对弈中主动点目（`/api/game/score`）都进入 `scoring` 状态并共用 `auto_scoring()` 引擎判定；弹层里"确认结果"走 `/api/game/confirm-score` 终局，"继续对弈"走 `/api/game/resume`（**不撤手数**、时钟重新起算——点目审查时间不计入行棋方；悔棋只在 `playing` 有效，点目阶段先 resume）。易错点：`auto_scoring` 的引擎分析是异步的，判定返回时**必须复查 `status` 仍是 `scoring`**——玩家可能已在等待窗口里点了"继续对弈"，直接 `enter_scoring` 会把已恢复的对局拉回点目。
 - **引擎不入库**：`backend/engines/` 下的 exe/模型/choice.json 均 git 忽略，运行时从官方源按需下载；打包发行时必须随附许可文本（`docs/licenses/`），且 `package.bat` 会剔除打包机的 `choice.json`（发行版按用户自己已装的包推导缺省）。
 
 ## 代码风格

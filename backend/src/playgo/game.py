@@ -220,15 +220,10 @@ class GameSession:
     def undo(self) -> int:
         """悔棋：人人退 1 手；人机退到再次轮到人类行棋。
 
-        返回退掉的手数；0 表示无法悔棋。
+        返回退掉的手数；0 表示无法悔棋（点目阶段先 resume 返回对弈）。
         """
-        if self.status == STATUS_ENDED or not self.moves:
+        if self.status != STATUS_PLAYING or not self.moves:
             return 0
-        if self.status == STATUS_SCORING:
-            # 点目阶段悔棋 = 回到棋盘继续下（撤销两次停一手）
-            self.status = STATUS_PLAYING
-            self.dead_stones.clear()
-            self.score_preview = None
         count = 0
         if self.cfg.mode == MODE_AI:
             human = self.cfg.human_color
@@ -306,6 +301,29 @@ class GameSession:
         return out
 
     # ── 终局点目 ─────────────────────────────────────────
+
+    def request_scoring(self) -> bool:
+        """对弈中主动点目：立即进入点目阶段（无需双停一手）。
+
+        死子判定与预览由随后的引擎分析给出（enter_scoring）；
+        返回是否发生状态转移（已在点目/已终局时为 False，幂等）。
+        """
+        if self.status != STATUS_PLAYING:
+            return False
+        self.status = STATUS_SCORING
+        self.dead_stones = set()
+        self.score_preview = None  # 引擎判定完成前不给出预览
+        return True
+
+    def resume(self) -> bool:
+        """拒绝点目结果：返回对弈。手数不动，点目审查时间不计入时钟。"""
+        if self.status != STATUS_SCORING:
+            return False
+        self.status = STATUS_PLAYING
+        self.dead_stones.clear()
+        self.score_preview = None
+        self._turn_started = time.monotonic()
+        return True
 
     def enter_scoring(self, dead_stones: set[int]) -> None:
         """双方停一手后，用引擎 ownership 给出死子判定与点目预览。"""

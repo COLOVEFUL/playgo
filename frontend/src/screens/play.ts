@@ -65,6 +65,7 @@ export function initPlay(): void {
   <footer class="controls">
     <button class="btn" id="btn-undo">${t("play.undo")}<span class="kbd">Ctrl+Z</span></button>
     <button class="btn" id="btn-pass">${t("play.pass")}</button>
+    <button class="btn" id="btn-score">${t("play.score_btn")}</button>
     <button class="btn danger" id="btn-resign">${t("play.resign")}</button>
     <div class="divider"></div>
     <button class="btn toggle" id="btn-hint">${t("play.hint_toggle")}</button>
@@ -120,6 +121,7 @@ export function initPlay(): void {
 
   $("btn-undo").addEventListener("click", doUndo);
   $("btn-pass").addEventListener("click", doPass);
+  $("btn-score").addEventListener("click", doScore);
   $("btn-resign").addEventListener("click", doResign);
   $("btn-menu").addEventListener("click", () => showScreen("menu"));
   const btnHint = $("btn-hint");
@@ -182,6 +184,17 @@ async function doPass(): Promise<void> {
   try {
     await api("/api/game/pass", {});
     toast(t("play.passed"));
+  } catch (e) {
+    toast(errText(e), true);
+  }
+}
+
+/** 主动点目：交给引擎判定死活并预览结果，接受与否在点目弹层中选择。 */
+async function doScore(): Promise<void> {
+  if (!state || state.status !== "playing") return;
+  try {
+    toast(t("play.scoring_toast"));
+    await api("/api/game/score", {});
   } catch (e) {
     toast(errText(e), true);
   }
@@ -404,9 +417,10 @@ function applyState(s: GameState, force = false): void {
         komi: s.komi,
       })}<br>${t("play.rules_move", { n: s.moves.length + 1 })}`;
 
-  // 按钮状态
-  setBtn("btn-undo", s.status === "playing" || s.status === "scoring");
+  // 按钮状态（点目阶段的出口在点目弹层：确认结果 / 继续对弈）
+  setBtn("btn-undo", s.status === "playing");
   setBtn("btn-pass", s.status === "playing");
+  setBtn("btn-score", s.status === "playing");
   setBtn("btn-resign", s.status === "playing");
 
   // AI 推荐/形势：局面一变立即撤下旧覆盖层（避免标记落在对方新子上），再按需刷新
@@ -485,7 +499,17 @@ function scoreText(winner: number, margin: number, b: number, w: number): string
 
 // ── 点目弹层 ──
 function showScoringDialog(): void {
-  if (!state?.score_preview) return;
+  // 引擎死活判定完成前无预览：先给"等待 + 继续对弈"出口，判定到达后整层重渲染
+  if (!state?.score_preview) {
+    const wait = showDialog(`
+      <h2>${t("play.score_title")}</h2>
+      <div class="body">${t("play.scoring_wait")}</div>
+      <div class="actions">
+        <button class="btn" id="dlg-continue">${t("play.score_resume")}</button>
+      </div>`);
+    wait.querySelector("#dlg-continue")!.addEventListener("click", doResume);
+    return;
+  }
   const sp = state.score_preview;
   const d = showDialog(`
     <h2>${t("play.score_title")}</h2>
@@ -509,10 +533,17 @@ function showScoringDialog(): void {
       toast(errText(e), true);
     }
   });
-  d.querySelector("#dlg-continue")!.addEventListener("click", async () => {
-    closeDialog();
-    await api("/api/game/undo", {});
-  });
+  d.querySelector("#dlg-continue")!.addEventListener("click", doResume);
+}
+
+/** 拒绝点目结果：不撤手数，返回对弈继续下。 */
+async function doResume(): Promise<void> {
+  closeDialog();
+  try {
+    await api("/api/game/resume", {});
+  } catch (e) {
+    toast(errText(e), true);
+  }
 }
 
 function renderScoringDialog(): void {

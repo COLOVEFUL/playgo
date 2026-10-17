@@ -122,3 +122,57 @@ def test_pass_then_scoring_flow():
     assert r["reason"] == "score"
     assert r["margin"] >= 0
     assert "detail" not in r
+
+
+def test_request_scoring_and_resume():
+    """对弈中主动点目：立即进入点目；拒绝结果则原样返回对弈。"""
+    g = GameSession(GameConfig())
+    g.play(BLACK, 3 * 19 + 3)
+    g.play(WHITE, 15 * 19 + 15)
+    assert g.request_scoring() is True
+    assert g.status == "scoring"
+    assert g.score_preview is None  # 引擎判定完成前不给出预览
+    assert g.request_scoring() is False  # 已在点目，幂等
+    assert g.resume() is True
+    assert g.status == "playing"
+    assert len(g.moves) == 2  # 手数不动
+    assert g.to_play == BLACK
+    assert g.resume() is False  # 非点目阶段不可 resume
+    # 终局后主动点目同样无效
+    g.resign(BLACK)
+    assert g.request_scoring() is False
+
+
+def test_undo_blocked_in_scoring():
+    """点目阶段悔棋无效（先 resume 返回对弈，再按常规悔棋）。"""
+    g = GameSession(GameConfig())
+    g.play(BLACK, 3 * 19 + 3)
+    g.request_scoring()
+    assert g.undo() == 0
+    assert len(g.moves) == 1
+
+
+def test_pass_scoring_resume_keeps_passes():
+    """双停一手进点目后拒绝结果：两次停一手保留在棋谱，再停立即重回点目。"""
+    g = GameSession(GameConfig())
+    g.play(BLACK, 3 * 19 + 3)
+    g.pass_move(WHITE)
+    g.pass_move(BLACK)
+    assert g.status == "scoring"
+    assert g.resume() is True
+    assert g.status == "playing"
+    assert len(g.moves) == 3  # 停一手不因 resume 被撤
+    g.pass_move(WHITE)  # 轮白；棋盘连续停一手计数仍 ≥2，一手即重回点目
+    assert g.status == "scoring"
+
+
+def test_resume_not_charged_clock():
+    """点目审查耗时不计入行棋方时钟（resume 后重新起算）。"""
+    ts = settings.TimeSettings(main_seconds=30, byo_seconds=5, byo_periods=3)
+    g = GameSession(GameConfig(time=ts))
+    g.play(BLACK, 3 * 19 + 3)  # 轮白，白方回合开始计时
+    g.request_scoring()
+    time.sleep(0.2)  # 点目审查
+    g.resume()
+    g.play(WHITE, 15 * 19 + 15)
+    assert g.clocks[WHITE].main > 29.9
