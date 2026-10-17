@@ -32,7 +32,7 @@ export const en: Record<MsgKey, string> = {
   "menu.card_pvp": "Two players",
   "menu.card_pvp_desc": "Hot-seat play, Black first, full clock and byo-yomi rules.",
   "menu.card_review": "Records · Review",
-  "menu.card_review_desc": "Browse past games, replay move by move, AI review with win-rate curve.",
+  "menu.card_review_desc": "Browse past games, replay move by move, compare against live AI suggestions or a full review — or take over any position and play it out yourself.",
   "menu.resume": "Resume game",
   "menu.resume_ai": "vs AI · {diff} · {color}",
   "menu.resume_pvp": "Two players",
@@ -151,6 +151,9 @@ export const en: Record<MsgKey, string> = {
   "play.rules_komi_move": "Chinese rules · komi {komi} · move <b>{n}</b>",
   "play.chip_ai": "vs AI · {diff} · {color}",
   "play.chip_pvp": "Two players",
+  "play.chip_takeover": "Takeover from review",
+  "play.unsaved_note": "Takeover games are not saved to Records",
+  "play.resign_body_takeover": "Resign this game? The takeover ends immediately (nothing is saved).",
 
   // ── Review screen ───────────────────────────────────
   "rv.curve_title": "W I N   R A T E",
@@ -164,6 +167,9 @@ export const en: Record<MsgKey, string> = {
   "rv.white_lead": "White",
   "rv.terr": "⚖ Territory",
   "rv.analyze": "AI review",
+  "rv.takeover": "↺ Take over",
+  "rv.takeover_toast": "Position taken over — play both sides freely (no clock, not saved)",
+  "rv.hint_line": "💡 AI suggests: <b style=\"color:#e8c860\">{coord}</b> (mover's win rate {p}%)",
   "rv.menu": "Menu",
   "rv.started": "Review started — results will appear when ready",
   "rv.progress": "Reviewing {done}/{total}",

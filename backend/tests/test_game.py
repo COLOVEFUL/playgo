@@ -176,3 +176,25 @@ def test_resume_not_charged_clock():
     g.resume()
     g.play(WHITE, 15 * 19 + 15)
     assert g.clocks[WHITE].main > 29.9
+
+
+def test_takeover_seed_and_undo():
+    """复盘接管：以棋谱前缀开局（小棋盘/贴目沿用），悔棋可退入前缀。"""
+    free = settings.TimeSettings(main_seconds=0, byo_seconds=0, byo_periods=0)
+    cfg = GameConfig(time=free, size=13, komi=6.5, takeover=True)
+    g = GameSession(cfg)
+    g.seed_moves([(BLACK, 3 * 13 + 3), (WHITE, 9 * 13 + 9)])
+    assert g.board.size == 13
+    assert len(g.moves) == 2
+    assert g.to_play == BLACK  # 前缀末手为白 → 轮黑
+    snap = g.snapshot()
+    assert snap["takeover"] is True
+    assert snap["size"] == 13
+    assert snap["komi"] == 6.5
+    assert g.clocks[BLACK].unlimited  # 接管不限时
+    g.play(BLACK, 5 * 13 + 5)
+    assert g.undo() == 1
+    assert g.to_play == BLACK
+    assert g.undo() == 1  # 再悔退入棋谱前缀
+    assert len(g.moves) == 1
+    assert g.to_play == WHITE

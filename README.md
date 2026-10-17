@@ -32,6 +32,12 @@ on your own machine, no account, no network required after setup.
 - **Auto-save** — finished games are written as SGF under `records/`
 - **AI review** — replay any saved game with a clickable win-rate curve,
   per-move grading (brilliant → blunder), engine suggestions, and territory replay
+- **Review hints** — at any replay position, request live top-3 candidate moves
+  with win rates and compare what you played against the engine's pick — no
+  full-game analysis needed first
+- **Takeover** — take over any reviewed position and play it out yourself,
+  handling both Black and White to verify your reading; free clock, original
+  komi, hints/territory still available; takeover games are not saved
 - **Scoring** — after two passes, or at any moment via the **Score** button:
   the engine marks dead stones and counts both sides with the chosen komi,
   then asks whether you accept the verdict — confirm to end and save the game,
@@ -99,7 +105,8 @@ on your own machine, no account, no network required after setup.
 │   │   │                   ownership arrive black-viewpoint, no flipping),
 │   │   │                   difficulty = visit budget + policy-pow sampling
 │   │   ├── main.py         FastAPI app: REST + /ws, AI move orchestration,
-│   │   │                   auto dead-stone detection, review batch analysis
+│   │   │                   auto dead-stone detection, review batch analysis,
+│   │   │                   review hints & position takeover
 │   │   ├── downloader.py   On-demand engine/model download with progress callbacks
 │   │   ├── sgf.py          SGF (FF4) writer/parser + records library
 │   │   └── settings.py     Time presets, difficulty table, engine-package
@@ -151,6 +158,7 @@ on your own machine, no account, no network required after setup.
 
 REST: `GET /api/state` · `POST /api/game/new|move|pass|resign|undo|dead-stones|confirm-score` ·
 `GET /api/game/hint|territory` · `GET /api/records[/{file}]` · `POST /api/review/analyze` ·
+`GET /api/review/hint` · `POST /api/review/takeover` ·
 `GET /api/engines/status` · `POST /api/engines/download` · `POST /api/engines/select`
 
 WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,

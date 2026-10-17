@@ -30,7 +30,7 @@ export const zh = {
   "menu.card_pvp": "双人对弈",
   "menu.card_pvp_desc": "同屏轮流落子，黑先白后，完整计时与读秒规则。",
   "menu.card_review": "棋谱库 · 复盘",
-  "menu.card_review_desc": "浏览历史对局，逐步回放，AI 深度复盘与胜率曲线。",
+  "menu.card_review_desc": "浏览历史对局，逐步回放，AI 推荐对照、深度复盘与胜率曲线，亦可接管局面自行推演。",
   "menu.resume": "回到对局",
   "menu.resume_ai": "人机 · {diff} · {color}",
   "menu.resume_pvp": "双人对弈",
@@ -149,6 +149,9 @@ export const zh = {
   "play.rules_komi_move": "中国规则 · 贴 {komi} 目 · 第 <b>{n}</b> 手",
   "play.chip_ai": "人机对局 · {diff} · {color}",
   "play.chip_pvp": "双人对弈",
+  "play.chip_takeover": "复盘试下",
+  "play.unsaved_note": "试下对局不保存棋谱",
+  "play.resign_body_takeover": "确定中盘认输吗？试下对局将就此结束（不保存棋谱）。",
 
   // ── 复盘页 ──────────────────────────────────────────
   "rv.curve_title": "胜 率 曲 线",
@@ -162,6 +165,9 @@ export const zh = {
   "rv.white_lead": "白优",
   "rv.terr": "⚖ 形势",
   "rv.analyze": "AI 深度复盘",
+  "rv.takeover": "↺ 接管试下",
+  "rv.takeover_toast": "已从当前局面接管，黑白由您推演（不限时、不存谱）",
+  "rv.hint_line": "💡 AI 推荐：<b style=\"color:#e8c860\">{coord}</b>（行棋方胜率 {p}%）",
   "rv.menu": "主菜单",
   "rv.started": "复盘分析已开始，完成后自动展示",
   "rv.progress": "复盘分析中 {done}/{total}",

@@ -204,7 +204,7 @@ async function doResign(): Promise<void> {
   if (!state || state.status === "ended") return;
   const d = showDialog(`
     <h2>${t("play.resign_title")}</h2>
-    <div class="body">${t("play.resign_body")}</div>
+    <div class="body">${t(state.takeover ? "play.resign_body_takeover" : "play.resign_body")}</div>
     <div class="actions"><button class="btn" id="dlg-cancel">${t("play.resign_cancel")}</button>
     <button class="btn primary" id="dlg-yes">${t("play.resign_ok")}</button></div>`);
   d.querySelector("#dlg-cancel")!.addEventListener("click", closeDialog);
@@ -387,7 +387,9 @@ function applyState(s: GameState, force = false): void {
           diff,
           color: t(s.human_color === BLACK ? "common.black_stone" : "common.white_stone"),
         })
-      : t("play.chip_pvp");
+      : s.takeover
+        ? t("play.chip_takeover")
+        : t("play.chip_pvp");
 
   // 手数列表
   const list = els.movelist;
@@ -575,7 +577,7 @@ function showResultDialog(s: GameState): void {
     <div class="body" style="text-align:center">
       <div style="font-family:var(--kai);font-size:44px;color:var(--gold);margin:8px 0">${who}</div>
       <div>${line}</div>
-      <div style="color:var(--ink-dim);font-size:12px;margin-top:10px">${t("play.saved_note")}</div>
+      <div style="color:var(--ink-dim);font-size:12px;margin-top:10px">${t(s.takeover ? "play.unsaved_note" : "play.saved_note")}</div>
     </div>
     <div class="actions">
       <button class="btn" id="dlg-close">${t("play.stay")}</button>

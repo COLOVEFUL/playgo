@@ -199,7 +199,7 @@ export class GoBoard {
     this.drawStones();
     if (this.mode === "scoring") this.drawDeadMarks();
     this.drawLastMove();
-    if (this.hints && this.mode === "play") this.drawHints();
+    if (this.hints && (this.mode === "play" || this.mode === "review")) this.drawHints();
     this.drawHover();
   }
 

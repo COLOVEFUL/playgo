@@ -1,11 +1,12 @@
-/** 复盘页：棋谱回放 + 胜率曲线 + AI 逐手分析 + 形势回看。 */
+/** 复盘页：棋谱回放 + 胜率曲线 + AI 逐手分析 + 形势回看 + AI 推荐/接管试下。 */
 
 import { api, onWs } from "../api";
 import { GoBoard } from "../board";
 import { errPayloadText, errText, t } from "../i18n";
 import type { MsgKey } from "../i18n";
-import type { RecordDetail, ReviewAnalysis, WsEvent } from "../types";
+import type { GameState, HintData, RecordDetail, ReviewAnalysis, WsEvent } from "../types";
 import { coordName, showScreen, toast } from "../main";
+import { onGameEvent } from "./play";
 
 const BLACK = 1;
 
@@ -14,6 +15,8 @@ let detail: RecordDetail | null = null;
 let curIdx = 0; // 当前展示到第几手（0=空盘）
 let analysis: ReviewAnalysis | null = null;
 let terrToggle = false;
+let hintToggle = false;
+let hintData: HintData | null = null; // 当前局面（= curIdx）的复盘推荐
 
 export function initReview(): void {
   const root = document.getElementById("screen-review")!;
@@ -50,8 +53,10 @@ export function initReview(): void {
     <input type="range" class="move-slider" id="rv-slider" min="0" max="0" value="0">
     <div class="divider"></div>
     <button class="btn toggle" id="rv-terr">${t("rv.terr")}</button>
+    <button class="btn toggle" id="rv-hint">${t("play.hint_toggle")}</button>
     <button class="btn primary" id="rv-analyze">${t("rv.analyze")}</button>
     <div class="divider"></div>
+    <button class="btn" id="rv-takeover">${t("rv.takeover")}</button>
     <button class="btn" id="rv-back">${t("rv.menu")}</button>
   </footer>`;
 
@@ -73,6 +78,19 @@ export function initReview(): void {
     terrBtn.classList.toggle("on", terrToggle);
     render();
   });
+  const hintBtn = $("rv-hint");
+  hintBtn.classList.toggle("on", hintToggle);
+  hintBtn.addEventListener("click", () => {
+    hintToggle = !hintToggle;
+    hintBtn.classList.toggle("on", hintToggle);
+    if (hintToggle) void fetchHint();
+    else {
+      hintData = null;
+      board.setHints(null);
+      render();
+    }
+  });
+  $("rv-takeover").addEventListener("click", doTakeover);
   $("rv-analyze").addEventListener("click", async () => {
     if (!detail) return;
     try {
@@ -142,6 +160,7 @@ async function load(file: string): Promise<void> {
   try {
     detail = await api<RecordDetail>(`/api/records/${encodeURIComponent(file)}`);
     analysis = detail.analysis;
+    hintData = null; // 换谱后旧推荐作废
     reapplyReview();
     board.setSize(detail.size);
     goto(0);
@@ -164,6 +183,50 @@ function goto(n: number): void {
   (document.getElementById("rv-slider") as HTMLInputElement).value = String(curIdx);
   document.getElementById("rv-label")!.textContent = `${curIdx} / ${max}`;
   render();
+  syncHints();
+}
+
+// ── 复盘 AI 推荐：对照"我下的"与"AI 正着"（独立于整谱深度复盘） ──
+async function fetchHint(): Promise<void> {
+  if (!detail || !hintToggle) return;
+  try {
+    const h = await api<HintData>(
+      `/api/review/hint?file=${encodeURIComponent(detail.file)}&moves=${curIdx}`,
+    );
+    // 响应到达时已导航离开该局面 → 丢弃
+    if (!hintToggle || !detail || h.move_count !== curIdx) return;
+    hintData = h;
+    board.setHints(h.moves);
+    render();
+  } catch (e) {
+    toast(errText(e), true);
+  }
+}
+
+/** 导航后同步推荐覆盖层：命中缓存直接上，否则清掉并按需拉取。 */
+function syncHints(): void {
+  if (!hintToggle) return;
+  if (hintData && hintData.move_count === curIdx) board.setHints(hintData.moves);
+  else {
+    board.setHints(null);
+    void fetchHint();
+  }
+}
+
+/** 接管试下：从当前局面起开一盘黑白皆由玩家执的对局（不限时、不存谱）。 */
+async function doTakeover(): Promise<void> {
+  if (!detail) return;
+  try {
+    const snap = await api<GameState>("/api/review/takeover", {
+      file: detail.file,
+      moves: curIdx,
+    });
+    toast(t("rv.takeover_toast"));
+    onGameEvent({ type: "state", game: snap }); // 直接套用对局页渲染，不等 WS
+    showScreen("play");
+  } catch (e) {
+    toast(errText(e), true);
+  }
 }
 
 /** 评估标签：以行棋方视角的胜率变化 */
@@ -223,6 +286,15 @@ function render(): void {
         })}
         ${!isBest && best ? `<br>${t("rv.suggest")}<b style="color:#e8c860">${coordName(best.point, N)}</b>（${(best.winrate_black * 100).toFixed(1)}%）` : ""}`;
     }
+  }
+  // 复盘推荐（开启且数据对应当前局面时）：首选点 + 行棋方视角胜率
+  if (hintToggle && hintData && hintData.move_count === curIdx && hintData.moves.length) {
+    const m = hintData.moves[0];
+    const wr = hintData.to_play === BLACK ? m.winrate_black : 1 - m.winrate_black;
+    info.innerHTML += `<br>${t("rv.hint_line", {
+      coord: coordName(m.point, N),
+      p: (wr * 100).toFixed(1),
+    })}`;
   }
   drawCurve();
 }

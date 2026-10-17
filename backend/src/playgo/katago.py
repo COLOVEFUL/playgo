@@ -350,12 +350,13 @@ class KataGoEngine:
         difficulty: str,
         *,
         size: int = 19,
+        komi: float = settings.KOMI,
     ) -> tuple[int | None, Analysis]:
         """按难度选点。返回 (落点(None=停一手), 分析结果)。"""
         preset = settings.DIFFICULTY_PRESETS[difficulty]
         visits = preset["cpu_visits"] if not self.is_gpu else preset["visits"]
         ana = await self.analyze(
-            moves, to_move=to_move, max_visits=visits, size=size
+            moves, to_move=to_move, max_visits=visits, size=size, komi=komi
         )
         point = self._choose(ana, preset)
         return point, ana
@@ -544,9 +545,10 @@ class EngineManager:
         difficulty: str,
         *,
         size: int = 19,
+        komi: float = settings.KOMI,
     ) -> tuple[int | None, Analysis]:
         return await self._retry_on_wedge(
-            lambda engine: engine.pick_move(moves, to_move, difficulty, size=size)
+            lambda engine: engine.pick_move(moves, to_move, difficulty, size=size, komi=komi)
         )
 
     async def shutdown(self) -> None:

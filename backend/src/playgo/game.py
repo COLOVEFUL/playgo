@@ -28,9 +28,11 @@ class GameConfig:
     difficulty: str = "medium"  # ai 模式
     human_color: int = BLACK  # ai 模式下人类执子
     komi: float = settings.KOMI
+    size: int = settings.BOARD_SIZE  # 常规对局恒 19；复盘接管可来自小棋盘棋谱
     time: settings.TimeSettings = field(default_factory=settings.TimeSettings)
     black_name: str = "Black"
     white_name: str = "White"
+    takeover: bool = False  # 复盘接管试下：黑白皆由玩家执，终局不存谱
 
     def ai_color(self) -> int | None:
         return opponent(self.human_color) if self.mode == MODE_AI else None
@@ -69,7 +71,7 @@ class GameSession:
     def __init__(self, cfg: GameConfig) -> None:
         self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.cfg = cfg
-        self.board = Board(size=settings.BOARD_SIZE, komi=cfg.komi)
+        self.board = Board(size=cfg.size, komi=cfg.komi)
         self.moves: list[MoveRecord] = []
         self.to_play = BLACK
         self.status = STATUS_PLAYING
@@ -93,6 +95,7 @@ class GameSession:
             "human_color": self.cfg.human_color,
             "ai_color": self.cfg.ai_color(),
             "komi": self.cfg.komi,
+            "takeover": self.cfg.takeover,
             "time": {
                 "main": self.cfg.time.main_seconds,
                 "byo": self.cfg.time.byo_seconds,
@@ -243,10 +246,21 @@ class GameSession:
 
     def _rebuild(self) -> None:
         """按剩余手数重放棋盘。"""
-        self.board = Board(size=settings.BOARD_SIZE, komi=self.cfg.komi)
+        self.board = Board(size=self.cfg.size, komi=self.cfg.komi)
         for m in self.moves:
             self.board.play(m.color, m.point)
         self.to_play = opponent(self.moves[-1].color) if self.moves else BLACK
+        self._turn_started = time.monotonic()
+
+    def seed_moves(self, moves: list[tuple[int, int | None]]) -> None:
+        """复盘接管：以棋谱前缀开局（黑白轮转由棋谱保证；非法谱抛 IllegalMove）。
+
+        建议配合不限时（free）时钟使用——接管后的手数不计时。
+        """
+        for color, point in moves:
+            r = self.board.play(color, point)
+            self.moves.append(MoveRecord(len(self.moves) + 1, color, point, r.captured, -1.0))
+        self.to_play = opponent(moves[-1][0]) if moves else BLACK
         self._turn_started = time.monotonic()
 
     # ── 计时驱动 ─────────────────────────────────────────

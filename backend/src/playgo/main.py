@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -19,10 +20,20 @@ from pydantic import BaseModel
 from playgo import settings
 from playgo.downloader import DownloadError, DownloadManager, installed, item_ids
 from playgo.errors import err_detail, payload_of
-from playgo.game import STATUS_ENDED, STATUS_PLAYING, STATUS_SCORING, GameConfig, GameSession
+from playgo.game import (
+    MODE_PVP,
+    STATUS_ENDED,
+    STATUS_PLAYING,
+    STATUS_SCORING,
+    GameConfig,
+    GameSession,
+)
 from playgo.katago import Analysis, EngineError, EngineManager
-from playgo.rules import BLACK, EMPTY, WHITE, IllegalMove
-from playgo.sgf import list_records, parse_sgf, save_record
+from playgo.rules import BLACK, EMPTY, WHITE, IllegalMove, opponent
+from playgo.sgf import SgfGame, list_records, parse_sgf, save_record
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("playgo.main")
@@ -41,6 +52,8 @@ class AppState:
         # 缓存键为完整着法序列（悔棋重下同手数也会失效），值为分析结果
         self._hint_cache: tuple[tuple[tuple[int, int | None], ...], Analysis] | None = None
         self._terr_cache: tuple[tuple[tuple[int, int | None], ...], Analysis] | None = None
+        # 复盘推荐缓存：棋谱不可变，键 (file, 手数) 永远有效，无需失效
+        self._review_hint_cache: dict[tuple[str, int], dict] = {}
         self.review_jobs: dict[str, dict] = {}  # file -> {progress, done, ...}
 
     async def broadcast(self, event: dict) -> None:
@@ -96,7 +109,9 @@ class AppState:
         self.emit_state()
         try:
             moves = [(m.color, m.point) for m in g.moves]
-            point, _ana = await self.engine.pick_move(moves, g.to_play, g.cfg.difficulty)
+            point, _ana = await self.engine.pick_move(
+                moves, g.to_play, g.cfg.difficulty, size=g.board.size, komi=g.cfg.komi
+            )
             if not self._ai_needs_move():  # 期间被悔棋/新对局
                 return
             if point is None:
@@ -159,7 +174,9 @@ class AppState:
         if cache and cache[0] == sig:
             return cache[1]
         moves = list(sig)
-        ana = await self.engine.analyze(moves, to_move=g.to_play, max_visits=v)
+        ana = await self.engine.analyze(
+            moves, to_move=g.to_play, max_visits=v, size=g.board.size, komi=g.cfg.komi
+        )
         if territory:
             self._terr_cache = (sig, ana)
         else:
@@ -205,6 +222,11 @@ class SelectReq(BaseModel):
 
 class ReviewReq(BaseModel):
     file: str
+
+
+class TakeoverReq(BaseModel):
+    file: str
+    moves: int  # 接管位置：已重放的手数（0=空盘）
 
 
 # ── REST API ─────────────────────────────────────────────
@@ -349,9 +371,11 @@ async def resume_game() -> dict:
 
 
 async def finalize_game() -> None:
-    """终局：保存 SGF 并广播。"""
+    """终局：保存 SGF 并广播（复盘接管试下不存谱，避免半盘推演污染棋谱库）。"""
     g = state.game
     if not g or g.status != STATUS_ENDED:
+        return
+    if g.cfg.takeover:
         return
     path = save_record(g.to_sgf(), settings.RECORDS_DIR)
     asyncio.ensure_future(
@@ -410,12 +434,17 @@ async def records() -> list[dict]:
     return list_records(settings.RECORDS_DIR)
 
 
-@app.get("/api/records/{file_path:path}")
-async def record_detail(file_path: str) -> dict:
+def _load_record(file_path: str) -> tuple[SgfGame, Path]:
+    """按库内相对路径读棋谱；不存在或非 .sgf 抛 404。"""
     f = settings.RECORDS_DIR / file_path
     if not f.exists() or f.suffix != ".sgf":
         raise HTTPException(404, err_detail("record.not_found"))
-    g = parse_sgf(f.read_text(encoding="utf-8"))
+    return parse_sgf(f.read_text(encoding="utf-8")), f
+
+
+@app.get("/api/records/{file_path:path}")
+async def record_detail(file_path: str) -> dict:
+    g, f = _load_record(file_path)
     analysis_file = f.with_suffix(".analysis.json")
     analysis = None
     if analysis_file.exists():
@@ -439,6 +468,79 @@ async def record_detail(file_path: str) -> dict:
     }
 
 
+@app.get("/api/review/hint")
+async def review_hint(file: str, moves: int) -> dict:
+    """复盘推荐：对棋谱第 moves 手后的局面实时分析（无需整谱深度复盘）。
+
+    供玩家逐手对照"我下的"与"AI 认为的正着"；响应结构同 /api/game/hint。
+    棋谱不可变，结果按 (file, moves) 永久缓存。
+    """
+    sgf, _f = _load_record(file)
+    n = max(0, min(moves, len(sgf.moves)))
+    cached = state._review_hint_cache.get((file, n))
+    if cached:
+        return cached
+    hist = list(sgf.moves[:n])
+    to_move = opponent(hist[-1][0]) if hist else BLACK
+    try:
+        engine = await state.engine.ensure_started()
+        v = settings.HINT_VISITS if engine.is_gpu else settings.HINT_VISITS_CPU
+        ana = await state.engine.analyze(
+            hist, to_move=to_move, max_visits=v, size=sgf.size, komi=sgf.komi
+        )
+    except EngineError as e:
+        raise HTTPException(503, err_detail(e.code, e.params)) from e
+    top = ana.best_moves[:3]
+    data = {
+        "to_play": to_move,
+        "move_count": n,
+        "winrate_black": ana.winrate_black,
+        "score_lead_black": ana.score_lead_black,
+        "moves": [
+            {
+                "point": m["point"],
+                "winrate_black": m["winrate_black"],
+                "score_lead_black": m["score_lead_black"],
+                "order": m["order"],
+            }
+            for m in top
+        ],
+    }
+    state._review_hint_cache[(file, n)] = data
+    return data
+
+
+@app.post("/api/review/takeover")
+async def review_takeover(req: TakeoverReq) -> dict:
+    """复盘接管：从棋谱第 moves 手的局面起，开一盘黑白皆由玩家执的试下对局。
+
+    不限时、沿用棋谱贴目/棋盘尺寸/对局者名，终局不保存棋谱（cfg.takeover）。
+    """
+    sgf, _f = _load_record(req.file)
+    n = max(0, min(req.moves, len(sgf.moves)))
+    if state._ai_task and not state._ai_task.done():
+        state._ai_task.cancel()
+    cfg = GameConfig(
+        mode=MODE_PVP,
+        komi=sgf.komi,
+        size=sgf.size,
+        time=settings.TimeSettings.presets()["free"],
+        black_name=sgf.black_name,
+        white_name=sgf.white_name,
+        takeover=True,
+    )
+    g = GameSession(cfg)
+    try:
+        g.seed_moves(list(sgf.moves[:n]))
+    except IllegalMove as e:  # 外部棋谱可能含非法着法
+        raise HTTPException(400, err_detail(e.code, e.params)) from e
+    state.game = g
+    state._hint_cache = None
+    state._terr_cache = None
+    state.emit_state()
+    return g.snapshot() | {"clocks": g.clock_view()}
+
+
 @app.post("/api/review/analyze")
 async def review_analyze(req: ReviewReq) -> dict:
     f = settings.RECORDS_DIR / req.file
@@ -460,7 +562,11 @@ async def review_analyze(req: ReviewReq) -> dict:
             to_move = BLACK
             for i in range(total):
                 ana = await state.engine.analyze(
-                    hist, to_move=to_move, max_visits=settings.REVIEW_VISITS
+                    hist,
+                    to_move=to_move,
+                    max_visits=settings.REVIEW_VISITS,
+                    size=sgf.size,
+                    komi=sgf.komi,
                 )
                 out_positions.append(
                     {

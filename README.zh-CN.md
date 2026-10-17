@@ -27,6 +27,10 @@
 - **自动存谱**：对局结束自动写入 `records/`（标准 SGF 格式）
 - **AI 深度复盘**：胜率曲线（可点击跳转）、逐手评价（神之一手 → 败着）、
   AI 建议着法、形势回看
+- **复盘 AI 推荐**：回放到任意手数，一键请求当前局面的 Top-3 候选与胜率，
+  对照"自己下的"与"AI 认为的正着"——无需先跑完整复盘分析
+- **接管试下**：从复盘中的任意局面接管棋局，黑白双方都由你执子推演验算，
+  不限时、沿用原谱贴目，AI 推荐与形势判断照常可用；试下对局不保存棋谱
 - **终局点目**：双停一手、或对弈中随时点「点目」主动终局——引擎按所选贴目
   自动判定死活并点清黑白目数，评定胜负后询问是否接受；确认即终局存谱，
   也可选择继续对弈（不撤手数）
@@ -90,7 +94,7 @@
 │   │   │                   归属天然黑方视角，无需翻转）、
 │   │   │                   难度 = 搜索量 + 先验幂次采样
 │   │   ├── main.py         FastAPI 入口：REST + /ws、AI 行棋编排、
-│   │   │                   自动死活判定、复盘批量分析
+│   │   │                   自动死活判定、复盘批量分析、复盘推荐与接管试下
 │   │   ├── downloader.py   引擎/模型按需下载（进度回调 → WS）
 │   │   ├── sgf.py          SGF（FF4）写入/解析 + 棋谱库
 │   │   └── settings.py     用时预设、难度表、引擎包注册表、官方下载直链
@@ -137,6 +141,7 @@
 
 REST：`GET /api/state` · `POST /api/game/new|move|pass|resign|undo|dead-stones|confirm-score` ·
 `GET /api/game/hint|territory` · `GET /api/records[/{file}]` · `POST /api/review/analyze` ·
+`GET /api/review/hint` · `POST /api/review/takeover` ·
 `GET /api/engines/status` · `POST /api/engines/download`
 
 WS `/ws` 事件：`state`、`clocks`、`engine`、`download`、`saved`、
