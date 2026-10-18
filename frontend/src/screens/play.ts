@@ -56,7 +56,7 @@ export function initPlay(): void {
       </div>
       <div class="sec" id="hint-sec">
         <h3>${t("play.hint_title")}</h3>
-        <div class="hint-box" id="hint-box"><span class="pct">—</span><div id="hint-text">${t("play.hint_off")}</div></div>
+        <div class="hint-box" id="hint-box"><span class="pct">—</span><div id="hint-text" role="status" aria-live="polite">${t(hintOn ? "play.hint_wait" : "play.hint_off")}</div></div>
       </div>
     </aside>
   </main>
@@ -127,11 +127,16 @@ export function initPlay(): void {
   const btnHint = $("btn-hint");
   const btnTerr = $("btn-terr");
   btnHint.classList.toggle("on", hintOn);
+  btnHint.setAttribute("aria-pressed", String(hintOn));
   btnTerr.classList.toggle("on", terrOn);
   btnHint.addEventListener("click", () => {
     hintOn = !hintOn;
     btnHint.classList.toggle("on", hintOn);
-    if (hintOn) void fetchHint();
+    btnHint.setAttribute("aria-pressed", String(hintOn));
+    if (hintOn) {
+      clearHints();
+      void fetchHint();
+    }
     else clearHints();
   });
   btnTerr.addEventListener("click", () => {
@@ -235,7 +240,12 @@ function clearHints(): void {
   hintKey = "";
   hintMoveCount = -1;
   board.setHints(null);
-  els.hintText.innerHTML = t(hintOn ? "play.hint_wait" : "play.hint_off");
+  showHintMessage(t(hintOn ? "play.hint_wait" : "play.hint_off"));
+}
+
+function showHintMessage(message: string, busy = false): void {
+  els.hintText.textContent = message;
+  els.hintSec.setAttribute("aria-busy", String(busy));
   const pct = els.hintText.parentElement!.querySelector(".pct");
   if (pct) pct.textContent = "—";
 }
@@ -256,17 +266,22 @@ async function fetchHint(): Promise<void> {
   if (!state || !hintOn || !isHumanTurn()
     || !document.getElementById("screen-play")?.classList.contains("active")) return;
   const key = positionKey();
-  if (hintAbort && hintKey === key) return;
+  if (hintAbort && hintKey === key) {
+    if (hintMoveCount !== state.moves.length) showHintMessage(t("play.hint_loading"), true);
+    return;
+  }
   hintAbort?.abort();
   const controller = new AbortController();
   hintAbort = controller;
   hintKey = key;
+  showHintMessage(t("play.hint_loading"), true);
   try {
     await streamHint("/api/game/hint/stream", controller.signal, (h) => {
       // 响应到达时局面或轮次已变 → 丢弃
       if (controller.signal.aborted || !hintOn || !state || state.status !== "playing" || key !== positionKey()
         || h.move_count !== state.moves.length || !isHumanTurn()) return;
       hintMoveCount = h.move_count;
+      els.hintSec.setAttribute("aria-busy", String(h.thinking));
       board.setHints(h.recommend_pass ? null : h.moves);
       if (h.moves.length || h.recommend_pass) {
         const m = h.moves[0];
@@ -275,17 +290,22 @@ async function fetchHint(): Promise<void> {
         const wr = h.recommend_pass ? h.winrate_black : m.winrate_black;
         const myWr = h.to_play === BLACK ? wr : 1 - wr;
         els.hintText.innerHTML = t("play.hint_item", {
-          coord,
+          color: t(h.to_play === BLACK ? "stone.black" : "stone.white"),
           p: (myWr * 100).toFixed(1),
           progress: hintProgress(h),
         });
         els.hintText.parentElement!.querySelector(".pct")!.textContent = coord;
+      } else {
+        showHintMessage(t("rv.hint_empty"), h.thinking);
       }
       updateWinrate(h.winrate_black, h.score_lead_black);
     });
   } catch (e) {
     if (!controller.signal.aborted && hintOn && key === positionKey()
-      && state?.status === "playing") toast(errText(e), true);
+      && state?.status === "playing") {
+      showHintMessage(t("play.hint_failed"));
+      toast(errText(e), true);
+    }
   } finally {
     if (hintAbort === controller) hintAbort = null;
   }

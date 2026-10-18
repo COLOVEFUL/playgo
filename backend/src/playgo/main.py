@@ -10,16 +10,17 @@ import contextlib
 import json
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from playgo import settings
 from playgo.downloader import DownloadError, DownloadManager, installed, item_ids
-from playgo.errors import err_detail, payload_of
+from playgo.errors import RecordError, err_detail, payload_of
 from playgo.game import (
     MODE_PVP,
     STATUS_ENDED,
@@ -31,7 +32,7 @@ from playgo.game import (
 from playgo.hints import HintService
 from playgo.katago import Analysis, EngineError, EngineManager
 from playgo.rules import BLACK, EMPTY, WHITE, IllegalMove, opponent
-from playgo.sgf import SgfGame, list_records, parse_sgf, save_record
+from playgo.sgf import SgfGame, list_records, parse_sgf, save_record, validate_import
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -125,6 +126,7 @@ class AppState:
                 g.pass_move(g.to_play)
             else:
                 g.play(g.to_play, point)
+            await self.hints.cancel_stale()
         except (EngineError, IllegalMove) as e:
             log.exception("AI 行棋失败: %s", e)
             asyncio.ensure_future(self.broadcast({"type": "error", "error": payload_of(e)}))
@@ -236,6 +238,7 @@ class SelectReq(BaseModel):
 
 class ReviewReq(BaseModel):
     file: str
+    force: bool = False  # 自动进入复用合格缓存；手动按钮可强制重算
 
 
 class TakeoverReq(BaseModel):
@@ -290,6 +293,7 @@ async def new_game(req: NewGameReq) -> dict:
         white_name="KataGo" if ai_color == WHITE else req.white_name,
     )
     state.game = GameSession(cfg)
+    await state.hints.cancel_stale()
     state._hint_cache = None
     state._terr_cache = None
     state.emit_state()
@@ -310,6 +314,7 @@ async def play_move(req: MoveReq) -> dict:
         g.play(g.to_play, req.point)
     except IllegalMove as e:
         raise HTTPException(400, err_detail(e.code, e.params)) from e
+    await state.hints.cancel_stale()
     state.emit_state()
     state.schedule_ai()
     return {"ok": True}
@@ -322,6 +327,7 @@ async def pass_move() -> dict:
         g.pass_move(g.to_play)
     except IllegalMove as e:
         raise HTTPException(400, err_detail(e.code, e.params)) from e
+    await state.hints.cancel_stale()
     state.emit_state()
     if g.status == STATUS_SCORING:
         await state.auto_scoring()
@@ -340,6 +346,7 @@ async def request_score() -> dict:
         state._ai_task.cancel()  # 在途 AI 行棋作废（点目阶段其回复本就会被丢弃）
         g.ai_thinking = False
     if g.request_scoring():
+        await state.hints.cancel_stale()
         state.emit_state()
         await state.auto_scoring()
     return {"ok": True, "score_preview": g.score_preview}
@@ -351,6 +358,7 @@ async def resign(req: ResignReq) -> dict:
     if state._ai_task and not state._ai_task.done():
         state._ai_task.cancel()
     g.resign(req.color)
+    await state.hints.cancel_stale()
     await finalize_game()
     state.emit_state()
     return {"ok": True, "result": g.result}
@@ -363,6 +371,7 @@ async def undo() -> dict:
         state._ai_task.cancel()
         g.ai_thinking = False
     n = g.undo()
+    await state.hints.cancel_stale()
     state._hint_cache = None
     state._terr_cache = None
     state.emit_state()
@@ -387,6 +396,7 @@ async def confirm_score() -> dict:
         g.confirm_score()
     except IllegalMove as e:
         raise HTTPException(400, err_detail(e.code, e.params)) from e
+    await state.hints.cancel_stale()
     await finalize_game()
     state.emit_state()
     return {"ok": True, "result": g.result}
@@ -398,6 +408,7 @@ async def resume_game() -> dict:
     g = _game()
     if not g.resume():
         raise HTTPException(400, err_detail("scoring.not_active"))
+    await state.hints.cancel_stale()
     state.emit_state()
     state.schedule_ai()
     return {"ok": True}
@@ -449,7 +460,7 @@ async def hint() -> dict:
     except EngineError as e:
         raise HTTPException(503, err_detail(e.code, e.params)) from e
     assert ana is not None
-    top = ana.best_moves[:3]
+    top = ana.best_moves[: settings.HINT_MOVE_COUNT]
     return {
         "to_play": to_play,
         "move_count": move_count,
@@ -492,6 +503,29 @@ async def records() -> list[dict]:
     return list_records(settings.RECORDS_DIR)
 
 
+@app.post("/api/records/import")
+async def import_record(request: Request, filename: str) -> dict:
+    """接收原始SGF文件，不依赖multipart；校验成功才写入独立棋谱库路径。"""
+    if not filename.lower().endswith(".sgf"):
+        raise HTTPException(400, err_detail("record.bad_extension"))
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > settings.RECORD_IMPORT_MAX_BYTES:
+            raise HTTPException(413, err_detail("record.too_large", {"max_mb": 2}))
+        raw.extend(chunk)
+    try:
+        _game, text = validate_import(bytes(raw))
+    except RecordError as exc:
+        raise HTTPException(400, err_detail(exc.code, exc.params)) from exc
+    except (ValueError, LookupError) as exc:
+        raise HTTPException(400, err_detail("record.invalid_sgf")) from exc
+    folder = settings.RECORDS_DIR / "imported"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{uuid.uuid4().hex}.sgf"
+    target.write_text(text, encoding="utf-8")
+    return {"file": target.relative_to(settings.RECORDS_DIR).as_posix()}
+
+
 def _load_record(file_path: str) -> tuple[SgfGame, Path]:
     """按库内相对路径读棋谱；不存在或非 .sgf 抛 404。"""
     f = settings.RECORDS_DIR / file_path
@@ -503,16 +537,7 @@ def _load_record(file_path: str) -> tuple[SgfGame, Path]:
 @app.get("/api/records/{file_path:path}")
 async def record_detail(file_path: str) -> dict:
     g, f = _load_record(file_path)
-    analysis_file = f.with_suffix(".analysis.json")
-    analysis = None
-    if analysis_file.exists():
-        try:
-            data = json.loads(analysis_file.read_text(encoding="utf-8"))
-        except ValueError:
-            data = None  # 损坏的缓存当作未分析
-        # 视角修复（2026-10）前生成的旧文件 odd 手是反的，缺标记一律视为未分析
-        if data and data.get("perspective") == "black":
-            analysis = data
+    analysis = _read_review_analysis(f)
     return {
         "file": file_path,
         "size": g.size,
@@ -526,6 +551,17 @@ async def record_detail(file_path: str) -> dict:
     }
 
 
+def _read_review_analysis(f: Path) -> dict | None:
+    try:
+        data = json.loads(f.with_suffix(".analysis.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None  # 缺失/损坏的缓存当作未分析
+    # 旧版按行棋方翻转的数据无效；低预算数据可暂时展示，自动分析会升级。
+    if isinstance(data, dict) and data.get("perspective") == "black":
+        return data
+    return None
+
+
 @app.get("/api/review/hint/stream")
 async def review_hint_stream(file: str, moves: int) -> StreamingResponse:
     sgf, path = _load_record(file)
@@ -535,7 +571,7 @@ async def review_hint_stream(file: str, moves: int) -> StreamingResponse:
         state.hints.stream(
             state.engine,
             hist,
-            to_move=opponent(hist[-1][0]) if hist else BLACK,
+            to_move=opponent(hist[-1][0]) if hist else sgf.moves[0][0] if sgf.moves else BLACK,
             size=sgf.size,
             komi=sgf.komi,
             source=(file, path.stat().st_mtime_ns),
@@ -559,7 +595,7 @@ async def review_hint(file: str, moves: int) -> dict:
     if cached:
         return cached
     hist = list(sgf.moves[:n])
-    to_move = opponent(hist[-1][0]) if hist else BLACK
+    to_move = opponent(hist[-1][0]) if hist else sgf.moves[0][0] if sgf.moves else BLACK
     try:
         engine = await state.engine.ensure_started()
         v = settings.HINT_VISITS if engine.is_gpu else settings.HINT_VISITS_CPU
@@ -568,7 +604,7 @@ async def review_hint(file: str, moves: int) -> dict:
         )
     except EngineError as e:
         raise HTTPException(503, err_detail(e.code, e.params)) from e
-    top = ana.best_moves[:3]
+    top = ana.best_moves[: settings.HINT_MOVE_COUNT]
     data = {
         "to_play": to_move,
         "move_count": n,
@@ -609,11 +645,14 @@ async def review_takeover(req: TakeoverReq) -> dict:
     g = GameSession(cfg)
     try:
         g.seed_moves(list(sgf.moves[:n]))
+        if not n and sgf.moves:
+            g.to_play = sgf.moves[0][0]
     except IllegalMove as e:  # 外部棋谱可能含非法着法
         raise HTTPException(400, err_detail(e.code, e.params)) from e
     if state._ai_task and not state._ai_task.done():
         state._ai_task.cancel()
     state.game = g
+    await state.hints.cancel_stale()
     state._hint_cache = None
     state._terr_cache = None
     state.emit_state()
@@ -622,32 +661,68 @@ async def review_takeover(req: TakeoverReq) -> dict:
 
 @app.post("/api/review/analyze")
 async def review_analyze(req: ReviewReq) -> dict:
-    f = settings.RECORDS_DIR / req.file
-    if not f.exists():
-        raise HTTPException(404, err_detail("record.not_found"))
+    sgf, f = _load_record(req.file)
     job_key = req.file
-    job = state.review_jobs.get(job_key)
+    job: dict = state.review_jobs.get(job_key, {})
     if job and not job.get("done") and job.get("task") and not job["task"].done():
-        return {"ok": True, "already_running": True, "progress": job["progress"]}
+        return {
+            "ok": True,
+            "already_running": True,
+            "progress": job["progress"],
+            "analysis": job.get("analysis"),
+        }
+    job = {"progress": 0, "done": False}
+    state.review_jobs[job_key] = job
 
-    sgf = parse_sgf(f.read_text(encoding="utf-8"))
+    def check_engine(engine) -> None:
+        if state.engine.engine is not engine:
+            raise EngineError(code="engine.exited")
 
     async def _run() -> None:
-        out_positions = []
         try:
+            engine = await state.engine.ensure_started()
+            visits = settings.review_visits(is_gpu=engine.is_gpu)
             moves = sgf.moves
             total = len(moves) + 1
+            metadata = {
+                "file": job_key,
+                "visits": visits,
+                "perspective": "black",
+                "model": engine.model.name,
+                "backend": engine.backend,
+                "record_mtime_ns": f.stat().st_mtime_ns,
+            }
+            cached = _read_review_analysis(f)
+            if (
+                not req.force
+                and cached
+                and all(
+                    cached.get(key) == value
+                    for key, value in metadata.items()
+                    if key != "visits"
+                )
+                and cached.get("visits", 0) >= visits
+                and len(cached.get("positions", [])) == total
+            ):
+                job.update(done=True, progress=total)
+                await state.broadcast({"type": "review_done", "file": job_key, "total": total})
+                return
+            data: dict = metadata | {"positions": []}
+            job["analysis"] = data
             hist: list[tuple[int, int | None]] = []
-            to_move = BLACK
+            to_move = sgf.moves[0][0] if sgf.moves else BLACK
             for i in range(total):
-                ana = await state.engine.analyze(
+                # 一轮复盘绑定同一实例，避免切换引擎后混合不同模型的曲线。
+                check_engine(engine)
+                ana = await engine.analyze(
                     hist,
                     to_move=to_move,
-                    max_visits=settings.REVIEW_VISITS,
+                    max_visits=visits,
                     size=sgf.size,
                     komi=sgf.komi,
                 )
-                out_positions.append(
+                check_engine(engine)
+                data["positions"].append(
                     {
                         "n": i,
                         "winrate_black": ana.winrate_black,
@@ -667,27 +742,35 @@ async def review_analyze(req: ReviewReq) -> dict:
                     c, p = moves[i]
                     hist.append((c, p))
                     to_move = BLACK + WHITE - c
+                job["progress"] = i + 1
                 await state.broadcast(
-                    {"type": "review_progress", "file": job_key, "done": i + 1, "total": total}
+                    {
+                        "type": "review_progress",
+                        "file": job_key,
+                        "done": i + 1,
+                        "total": total,
+                        "visits": visits,
+                        "position": data["positions"][-1],
+                    }
                 )
-            data = {
-                "file": job_key,
-                "visits": settings.REVIEW_VISITS,
-                "perspective": "black",  # 视角标记：旧版（按行棋方翻转）文件视为过期
-                "positions": out_positions,
-            }
-            f.with_suffix(".analysis.json").write_text(
+            check_engine(engine)
+            # 完整计算成功后原子替换缓存，中断不能破坏之前的有效曲线。
+            output = f.with_suffix(".analysis.json")
+            temporary = output.with_suffix(".json.tmp")
+            temporary.write_text(
                 json.dumps(data, ensure_ascii=False), encoding="utf-8"
             )
-            state.review_jobs[job_key]["done"] = True
+            temporary.replace(output)
+            job["done"] = True
+            job.pop("analysis", None)
             await state.broadcast({"type": "review_done", "file": job_key, "total": total})
         except Exception as e:
             log.exception("复盘分析失败: %s", e)
-            state.review_jobs[job_key]["error"] = str(e)
+            job["error"] = str(e)
+            job.pop("analysis", None)
             await state.broadcast({"type": "review_error", "file": job_key, "error": payload_of(e)})
 
-    task = asyncio.create_task(_run())
-    state.review_jobs[job_key] = {"task": task, "progress": 0, "done": False}
+    job["task"] = asyncio.create_task(_run())
     return {"ok": True}
 
 
@@ -729,6 +812,7 @@ async def engine_download(req: DownloadReq) -> dict:
         with contextlib.suppress(Exception):
             await download_task
         with contextlib.suppress(Exception):
+            await state.hints.cancel_all()
             await state.engine.restart()
         # 引擎重启会杀死在途查询，AI 回合可能无人再驱动——清缓存并补排一次
         state._hint_cache = None
@@ -748,6 +832,7 @@ async def engine_select(req: SelectReq) -> dict:
     if not (pkg.exe.exists() and pkg.model.exists()):
         raise HTTPException(400, err_detail("engine.package_not_installed", {"id": req.id}))
     try:
+        await state.hints.cancel_all()
         await state.engine.select(req.id)
     except EngineError as e:
         raise HTTPException(503, err_detail(e.code, e.params)) from e
@@ -797,6 +882,7 @@ async def _ticker() -> None:
         changed = g.tick()
         now = time.monotonic()
         if changed:
+            await state.hints.cancel_stale()
             if g.status == STATUS_ENDED:
                 await finalize_game()
             state.emit_state()
@@ -829,6 +915,7 @@ async def shutdown() -> None:
         state.ticker.cancel()
     if state._ai_task and not state._ai_task.done():
         state._ai_task.cancel()
+    await state.hints.cancel_all()
     await state.engine.shutdown()
 
 

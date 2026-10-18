@@ -80,7 +80,7 @@ export interface HintData {
   budget_visits: number;
   ai_visits: number;
   thinking: boolean;
-  stop_reason: "visits" | "time" | "error" | null;
+  stop_reason: "visits" | "idle" | "error" | null;
   recommend_pass: boolean;
   to_play: number; // 推荐局面的行棋方 = 请求推荐的玩家，胜率展示视角
   move_count: number;
@@ -180,7 +180,7 @@ export type WsEvent =
       [k: string]: unknown;
     }
   | { type: "engine_restarted"; engine: EngineStatus }
-  | { type: "review_progress"; file: string; done: number; total: number }
+  | { type: "review_progress"; file: string; done: number; total: number; visits: number; position: ReviewPosition }
   | { type: "review_done"; file: string; total: number }
   | { type: "review_error"; file: string; error: ErrPayload }
   | { type: "pong"; t: number };

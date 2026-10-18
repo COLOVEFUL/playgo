@@ -5,6 +5,8 @@
 */
 
 import type { HintMove } from "./types";
+import { HINT_COLORS, hintBackground, hintWinrate, isPreferredHint, MAX_HINTS } from "./hint-style";
+import { t } from "./i18n";
 
 const BLACK = 1;
 const WHITE = 2;
@@ -98,6 +100,7 @@ export class GoBoard {
     this.board = Int8Array.from(board);
     this.lastMove = lastMove;
     this.toPlay = toPlay;
+    this.updateHintTitle();
     this.render();
   }
 
@@ -119,6 +122,7 @@ export class GoBoard {
 
   setHints(h: HintMove[] | null): void {
     this.hints = h;
+    this.updateHintTitle();
     this.render();
   }
   setTerritory(t: number[] | null): void {
@@ -137,12 +141,14 @@ export class GoBoard {
       const p = this.pointAt(e);
       if (p !== this.hover) {
         this.hover = p;
+        this.updateHintTitle();
         this.cb.onHover?.(p);
         this.render();
       }
     });
     this.canvas.addEventListener("mouseleave", () => {
       this.hover = null;
+      this.updateHintTitle();
       this.cb.onHover?.(null);
       this.render();
     });
@@ -367,36 +373,64 @@ export class GoBoard {
     ctx.stroke();
   }
 
+  private updateHintTitle(): void {
+    const hint = this.hints?.slice(0, MAX_HINTS).find((item) => item.point === this.hover);
+    this.canvas.title = hint ? t("hint.tooltip", {
+      kind: t(isPreferredHint(hint) ? "hint.preferred" : "hint.alternative"),
+      color: t(this.toPlay === BLACK ? "stone.black" : "stone.white"),
+      p: (hintWinrate(hint, this.toPlay) * 100).toFixed(1),
+    }) : "";
+  }
+
   private drawHints(): void {
     const { ctx } = this;
     const N = this.sizeN;
-    const tag = ["A", "B", "C"];
+    const hints = this.hints!.slice(0, MAX_HINTS);
+    const radius = this.cell * 0.46;
+    ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    for (let i = 0; i < this.hints!.length && i < 3; i++) {
-      const h = this.hints![i];
-      const x = this.gx((h.point % N) + 1);
-      const y = this.gx(Math.floor(h.point / N) + 1);
-      ctx.strokeStyle = "rgba(228,192,84,.95)";
-      ctx.lineWidth = 2.4;
+    hints.forEach((hint) => {
+      const x = this.gx((hint.point % N) + 1);
+      const y = this.gx(Math.floor(hint.point / N) + 1);
+      const preferred = isPreferredHint(hint);
+      const inset = Math.max(2.2, Math.min(3, this.cell * 0.07));
+      ctx.fillStyle = hintBackground(hint, hints, this.toPlay);
+      ctx.strokeStyle = preferred ? HINT_COLORS.preferred : HINT_COLORS.border;
+      ctx.lineWidth = preferred ? Math.min(2.2, this.cell * 0.1) : 1.2;
       ctx.beginPath();
-      ctx.arc(x, y, this.cell * 0.44, 0, 7);
-      ctx.stroke();
-      ctx.fillStyle = "rgba(228,192,84,.97)";
-      ctx.font = `bold ${this.cell * 0.34}px Georgia,serif`;
-      ctx.fillText(tag[i], x, y - 1);
-      // 数据一律黑方视角，展示换成"点推荐的玩家"视角（= 此刻行棋方，toPlay 已随状态同步）
-      const wr = this.toPlay === BLACK ? h.winrate_black : 1 - h.winrate_black;
-      const pct = `${(wr * 100).toFixed(1)}%`;
-      ctx.font = `${Math.max(9, this.cell * 0.24)}px Consolas,monospace`;
-      const w = ctx.measureText(pct).width + 10;
-      ctx.fillStyle = "rgba(24,17,9,.85)";
-      ctx.beginPath();
-      ctx.roundRect(x - w / 2, y + this.cell * 0.5, w, this.cell * 0.4, 4);
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "#e8c860";
-      ctx.fillText(pct, x, y + this.cell * 0.5 + this.cell * 0.2);
-    }
+      ctx.stroke();
+
+      if (preferred) {
+        // 双环均在选点内，紧邻候选不重叠，也不会随胜率变化跳到其他点。
+        ctx.lineWidth = 0.9;
+        ctx.beginPath();
+        ctx.arc(x, y, radius - inset, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      // 小棋盘显示空间充足；窄窗口的十九路棋盘简写为整数，悬停可看完整胜率。
+      const compact = this.cell < 28;
+      const winrate = hintWinrate(hint, this.toPlay);
+      const pct = compact
+        ? `${Math.round(winrate * 100)}`
+        : `${(winrate * 100).toFixed(1)}%`;
+      let fontSize = Math.min(18, Math.max(9, this.cell * (compact ? 0.48 : 0.3)));
+      ctx.font = `600 ${fontSize}px Consolas,monospace`;
+      const available = (radius - (preferred ? inset : 0)) * 2 - 2;
+      fontSize *= Math.min(1, available / ctx.measureText(pct).width);
+      ctx.font = `600 ${fontSize}px Consolas,monospace`;
+      // 浅色半透明选点会露出木纹和网格，给文字描深色细边以保持胜率可读。
+      ctx.strokeStyle = HINT_COLORS.background;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.strokeText(pct, x, y + 0.5);
+      ctx.fillStyle = HINT_COLORS.foreground;
+      ctx.fillText(pct, x, y + 0.5);
+    });
+    ctx.restore();
   }
 
   private drawTerritory(): void {
@@ -423,8 +457,10 @@ export class GoBoard {
     const N = this.sizeN;
     const x = this.gx((this.hover % N) + 1);
     const y = this.gx(Math.floor(this.hover / N) + 1);
-    this.drawStone(x, y, this.toPlay, 0.45);
-    ctx.strokeStyle = "rgba(228,192,84,.8)";
+    const hinted = this.hints?.slice(0, MAX_HINTS).some((hint) => hint.point === this.hover);
+    if (!hinted) this.drawStone(x, y, this.toPlay, 0.45);
+    // 首选的金环保持可见；悬停轮廓使用绿色，避免被误认成首选。
+    ctx.strokeStyle = hinted ? HINT_COLORS.border : "rgba(228,192,84,.8)";
     ctx.lineWidth = 1.6;
     ctx.beginPath();
     ctx.arc(x, y, this.cell * 0.5, 0, 7);

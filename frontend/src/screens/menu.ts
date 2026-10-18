@@ -4,8 +4,9 @@ import { api, onWs } from "../api";
 import { errPayloadText, errText, t } from "../i18n";
 import type { MsgKey } from "../i18n";
 import { difficultyDetails, difficultyLabel } from "../difficulty";
+import { bindRecordImport } from "../record-import";
 import type { EnginePackageInfo, EngineStatus, GameState, RecordItem } from "../types";
-import { closeDialog, engineStatus, setEngineStatus, showDialog, showScreen, toast } from "../main";
+import { closeDialog, engineStatus, escapeHtml, setEngineStatus, showDialog, showScreen, toast } from "../main";
 
 // 选项表携带字面量键，渲染期再 t()（语言切换后可重渲染）
 const TIMES: { id: string; label: string; noteKey: MsgKey }[] = [
@@ -116,8 +117,8 @@ export async function refreshMenu(focus?: string): Promise<void> {
             ? t("menu.resume_ai", { diff, color })
             : t("menu.resume_pvp")}
           · ${t("menu.move_n", { n: st.game.moves.length + 1 })} · ${t("menu.vs", {
-            black: st.game.names.black,
-            white: st.game.names.white,
+            black: escapeHtml(st.game.names.black),
+            white: escapeHtml(st.game.names.white),
           })}</p>
         </div>`;
       document.getElementById("card-resume")!.addEventListener("click", () => showScreen("play"));
@@ -353,18 +354,21 @@ async function showRecords(): Promise<void> {
   const rows = items
     .map(
       (r) => `<tr>
-        <td>${r.date}</td><td>${r.black}</td><td>${r.white}</td>
-        <td class="result-tag">${r.result || "?"}</td><td>${t("rec.moves_n", { n: r.moves })}</td>
-        <td><button class="btn primary" data-f="${r.file}">${t("rec.review")}</button></td>
+        <td>${escapeHtml(r.date)}</td><td>${escapeHtml(r.black)}</td><td>${escapeHtml(r.white)}</td>
+        <td class="result-tag">${escapeHtml(r.result || "?")}</td><td>${t("rec.moves_n", { n: r.moves })}</td>
+        <td><button class="btn primary" data-f="${escapeHtml(r.file)}">${t("rec.review")}</button></td>
       </tr>`,
     )
     .join("");
   panel.innerHTML = `
-    <div class="sec"><h3>${t("rec.title")}</h3>
+    <div class="sec"><div class="records-header"><h3>${t("rec.title")}</h3>
+      <button class="btn" id="rec-import" data-record-import title="${t("rec.import_tip")}">${t("rec.import")}</button>
+      <input id="rec-import-file" type="file" accept=".sgf,application/x-go-sgf" hidden></div>
       ${items.length ? `<table class="records">
         <tr><th>${t("rec.date")}</th><th>${t("rec.black")}</th><th>${t("rec.white")}</th><th>${t("rec.result")}</th><th>${t("rec.moves")}</th><th></th></tr>
         ${rows}</table>` : `<div style="font-size:12.5px;color:var(--ink-dim);padding:8px 0">${t("rec.empty")}</div>`}
     </div>`;
+  bindRecordImport(panel.querySelector("#rec-import")!, panel.querySelector("#rec-import-file")!);
   panel.querySelectorAll<HTMLButtonElement>("button[data-f]").forEach((b) =>
     b.addEventListener("click", () => {
       window.dispatchEvent(new CustomEvent("open-review", { detail: b.dataset.f }));

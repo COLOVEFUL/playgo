@@ -42,3 +42,9 @@ def payload_of(e: Exception) -> dict:
 
 class DownloadError(PlayGoError):
     """下载任务错误。"""
+
+
+class RecordError(PlayGoError):
+    """棋谱导入错误：record.invalid_sgf / unsupported_sgf / too_large / bad_extension。"""
+
+    code = "record.invalid_sgf"

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import re
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from playgo.rules import BLACK, WHITE
+from playgo.errors import RecordError
+from playgo.rules import BLACK, WHITE, Board, IllegalMove
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,6 +27,9 @@ def to_sgf_coords(point: int | None, size: int = 19) -> str:
 def from_sgf_coords(s: str, size: int = 19) -> int | None:
     if not s or s == "tt":
         return None
+    if len(s) != 2 or any(c not in _SGF_COL[:size] for c in s):
+        msg = "SGF坐标越界"
+        raise ValueError(msg)
     x, y = _SGF_COL.index(s[0]), _SGF_COL.index(s[1])
     return y * size + x
 
@@ -71,32 +75,166 @@ def _esc(s: str) -> str:
     return s.replace("\\", "\\\\").replace("]", "\\]")
 
 
-_PROP_RE = re.compile(r"([A-Z]{1,2})\[((?:\\\]|[^])])*)\]")
-_MOVE_RE = re.compile(r";\s*([BW])\[([a-s]{0,2})\]")
+class _SgfReader:
+    """顺序解析属性与树结构；评论中的括号/伪着法不参与结构解析。"""
+
+    def __init__(self, text: str) -> None:
+        self.text = text.lstrip("\ufeff")
+        self.pos = 0
+        self.charset_span: tuple[int, int] | None = None
+
+    def peek(self) -> str:
+        while self.pos < len(self.text) and self.text[self.pos].isspace():
+            self.pos += 1
+        return self.text[self.pos : self.pos + 1]
+
+    def value(self) -> str:
+        self.pos += 1  # [
+        out = []
+        while self.pos < len(self.text):
+            char = self.text[self.pos]
+            self.pos += 1
+            if char == "]":
+                return "".join(out)
+            if char == "\\":
+                if self.pos >= len(self.text):
+                    break
+                char = self.text[self.pos]
+                self.pos += 1
+                if char in "\r\n":
+                    if char == "\r" and self.text[self.pos : self.pos + 1] == "\n":
+                        self.pos += 1
+                    continue
+            out.append(char)
+        msg = "SGF属性未闭合"
+        raise ValueError(msg)
+
+    def node(self) -> dict[str, list[str]]:
+        props: dict[str, list[str]] = {}
+        while self.peek() and self.peek() not in ";()":
+            start = self.pos
+            while self.pos < len(self.text) and "A" <= self.text[self.pos] <= "Z":
+                self.pos += 1
+            key = self.text[start : self.pos]
+            if not key or key in props or self.peek() != "[":
+                msg = "SGF属性格式错误"
+                raise ValueError(msg)
+            values = []
+            while self.peek() == "[":
+                start = self.pos
+                values.append(self.value())
+                if key == "CA" and self.charset_span is None:
+                    self.charset_span = (start, self.pos)
+            props[key] = values
+        return props
+
+    def mainline(self) -> list[dict[str, list[str]]]:
+        stack: list[dict] = []
+        nodes = []
+        roots = 0
+        while char := self.peek():
+            self.pos += 1
+            if char == "(":
+                if stack and not stack[-1]["nodes"]:
+                    msg = "SGF分支缺少根节点"
+                    raise ValueError(msg)
+                selected = (
+                    roots == 0
+                    if not stack
+                    else stack[-1]["selected"] and not stack[-1]["children"]
+                )
+                if stack:
+                    stack[-1]["children"] += 1
+                else:
+                    roots += 1
+                stack.append({"selected": selected, "nodes": 0, "children": 0})
+            elif char == ";" and stack and not stack[-1]["children"]:
+                node = self.node()
+                stack[-1]["nodes"] += 1
+                if stack[-1]["selected"]:
+                    nodes.append(node)
+            elif char == ")" and stack and stack[-1]["nodes"]:
+                stack.pop()
+            else:
+                msg = "SGF树结构错误"
+                raise ValueError(msg)
+        if stack or not nodes:
+            msg = "SGF棋谱不完整"
+            raise ValueError(msg)
+        return nodes
 
 
 def parse_sgf(text: str) -> SgfGame:
-    """解析主变（不展开分支）。"""
-    g = SgfGame()
-    for key, val in _PROP_RE.findall(text[: text.find(";B[") if ";B[" in text else 2000]):
-        match key:
-            case "SZ":
-                g.size = int(val)
-            case "KM":
-                g.komi = float(val)
-            case "RU":
-                g.rule = val
-            case "PB":
-                g.black_name = val
-            case "PW":
-                g.white_name = val
-            case "DT":
-                g.date = val
-            case "RE":
-                g.result = val
-    for color, coords in _MOVE_RE.findall(text):
-        g.moves.append((BLACK if color == "B" else WHITE, from_sgf_coords(coords, g.size)))
+    """解析第一盘棋的第一主变；不把旁支或评论误当连续着法。"""
+    nodes = _SgfReader(text).mainline()
+    return _game_from_nodes(nodes)
+
+
+def _game_from_nodes(nodes: list[dict[str, list[str]]]) -> SgfGame:
+    root = nodes[0]
+    g = SgfGame(
+        size=int(root.get("SZ", ["19"])[0]),
+        komi=float(root.get("KM", ["7.5"])[0]),
+        rule=root.get("RU", ["Chinese"])[0],
+        black_name=root.get("PB", ["Black"])[0],
+        white_name=root.get("PW", ["White"])[0],
+        date=root.get("DT", [""])[0],
+        result=root.get("RE", [""])[0],
+    )
+    if not 2 <= g.size <= 19 or not math.isfinite(g.komi):
+        msg = "SGF棋盘尺寸或贴目不支持"
+        raise ValueError(msg)
+    for props in nodes:
+        if "B" in props and "W" in props:
+            msg = "SGF同节点包含双方着法"
+            raise ValueError(msg)
+        for tag, color in (("B", BLACK), ("W", WHITE)):
+            if tag in props:
+                if len(props[tag]) != 1:
+                    msg = "SGF同节点包含多手着法"
+                    raise ValueError(msg)
+                g.moves.append((color, from_sgf_coords(props[tag][0], g.size)))
     return g
+
+
+def validate_import(raw: bytes) -> tuple[SgfGame, str]:
+    """解码、校验主变并保留原文，禁止导入后静默丢失摆子局面。"""
+    # Latin-1 一一对应原字节，先安全读取根属性中的编码声明。
+    root = _SgfReader(raw.decode("latin-1").removeprefix("ï»¿")).mainline()[0]
+    if "CA" in root and (len(root["CA"]) != 1 or not root["CA"][0]):
+        msg = "SGF编码声明无效"
+        raise ValueError(msg)
+    charset = root.get("CA", [""])[0]
+    if charset:
+        text = raw.decode(charset).lstrip("\ufeff")
+    else:
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("gb18030")
+    reader = _SgfReader(text)
+    nodes = reader.mainline()
+    if nodes[0].get("GM", ["1"]) != ["1"]:
+        raise RecordError(code="record.unsupported_sgf")
+    if int(nodes[0].get("HA", ["0"])[0]) or any(
+        set(node) & {"AB", "AW", "AE", "PL"} for node in nodes
+    ):
+        raise RecordError(code="record.unsupported_sgf")
+    game = _game_from_nodes(nodes)
+    board = Board(game.size, game.komi)
+    try:
+        for color, point in game.moves:
+            board.play(color, point)
+    except IllegalMove as exc:
+        raise RecordError from exc
+    # 棋谱库统一UTF-8，保留评论/分支，只改真实编码属性（不能替换评论里的CA文本）。
+    if charset and reader.charset_span:
+        start, end = reader.charset_span
+        text = text[:start] + "[UTF-8]" + text[end:]
+    else:
+        start = text.index(";") + 1
+        text = text[:start] + "CA[UTF-8]" + text[start:]
+    return game, text
 
 
 def save_record(g: SgfGame, records_dir: Path) -> Path:

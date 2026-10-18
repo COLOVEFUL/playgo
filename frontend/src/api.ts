@@ -76,7 +76,9 @@ export async function streamHint(
   path: string, signal: AbortSignal, update: (hint: HintData) => void,
 ): Promise<void> {
   const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), 32000);
+  // 首批限时；之后只在 visits 增长时续期，正常长搜索没有固定总时限。
+  let waitSeconds = 32;
+  let deadline = setTimeout(() => controller.abort(), waitSeconds * 1000);
   const abort = () => controller.abort();
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) controller.abort();
@@ -99,6 +101,11 @@ export async function streamHint(
         if (!line.trim()) continue;
         const data = JSON.parse(line) as HintData & { error?: ErrPayload };
         if (data.error) throw new ApiError(data.error.code, data.error.args ?? {});
+        if (data.visits > (latest?.visits ?? 0)) {
+          clearTimeout(deadline);
+          waitSeconds = 17;
+          deadline = setTimeout(() => controller.abort(), waitSeconds * 1000);
+        }
         latest = data;
         update(data);
       }
@@ -109,8 +116,8 @@ export async function streamHint(
   } catch (e) {
     if (signal.aborted) return;
     if (latest) update({ ...latest, thinking: false,
-      stop_reason: controller.signal.aborted ? "time" : "error" });
-    else if (controller.signal.aborted) throw new ApiError("engine.analyze_timeout", { timeout: 30 });
+      stop_reason: controller.signal.aborted ? "idle" : "error" });
+    else if (controller.signal.aborted) throw new ApiError("engine.analyze_timeout", { timeout: waitSeconds });
     else throw e;
   } finally {
     clearTimeout(deadline);
@@ -122,6 +129,7 @@ export async function streamHint(
 export function hintProgress(h: HintData): string {
   const key = h.thinking ? "hint.searching"
     : h.stop_reason === "error" ? "hint.interrupted"
+    : h.stop_reason === "idle" ? "hint.stalled"
     : h.visits > h.ai_visits ? "hint.complete" : "hint.limited";
   return t(key, { visits: h.visits, budget: h.budget_visits });
 }

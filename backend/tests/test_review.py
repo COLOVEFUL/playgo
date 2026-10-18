@@ -1,6 +1,8 @@
 """复盘接管、推荐及跨对局异步分析的回归测试（不启动真实引擎）。"""
 
 import asyncio
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -9,7 +11,7 @@ from fastapi import HTTPException
 
 from playgo import main, settings
 from playgo.game import GameConfig, GameSession
-from playgo.katago import Analysis
+from playgo.katago import Analysis, EngineError
 from playgo.rules import BLACK, WHITE
 from playgo.sgf import SgfGame
 
@@ -80,7 +82,8 @@ def test_review_hint_uses_prefix_size_komi_and_cache(review_env):
         2.0,
         [0.0] * 81,
         [
-            {"point": 40, "winrate_black": 0.7, "score_lead_black": 2.0, "order": 0},
+            {"point": 40 + i, "winrate_black": 0.7, "score_lead_black": 2.0, "order": i}
+            for i in range(7)
         ],
     )
     review_env.engine.ensure_started = AsyncMock(return_value=SimpleNamespace(is_gpu=False))
@@ -91,6 +94,7 @@ def test_review_hint_uses_prefix_size_komi_and_cache(review_env):
     assert first["to_play"] == WHITE
     assert first["move_count"] == 3
     assert first["moves"][0]["winrate_black"] == 0.7  # DTO 保持黑方视角
+    assert [move["point"] for move in first["moves"]] == [40, 41, 42, 43, 44]
     review_env.engine.analyze.assert_awaited_once_with(
         [(BLACK, 1), (WHITE, 0), (BLACK, 9)],
         to_move=WHITE,
@@ -142,3 +146,129 @@ def test_inflight_analysis_keeps_original_position_and_does_not_cache(
 
 def test_repeated_takeovers_have_different_game_ids():
     assert GameSession(GameConfig()).id != GameSession(GameConfig()).id
+
+
+def setup_review_engine(app_state, *, gpu=False):
+    calls = []
+
+    async def analyze(moves, **kwargs):
+        calls.append((list(moves), kwargs))
+        return Analysis(kwargs["to_move"], 0.6 + len(moves) * 0.01, 2.0, [0.0] * 81)
+
+    engine = SimpleNamespace(
+        is_gpu=gpu,
+        model=Path("gpu-model" if gpu else "cpu-model"),
+        backend="opencl" if gpu else "eigen",
+        analyze=analyze,
+    )
+    app_state.engine.engine = engine
+    app_state.engine.ensure_started = AsyncMock(return_value=engine)
+    app_state.broadcast = AsyncMock()
+    return engine, calls
+
+
+@pytest.mark.parametrize("gpu", [False, True])
+def test_review_budget_prefixes_and_progressive_curve(review_env, tmp_path, gpu):
+    async def scenario():
+        _engine, calls = setup_review_engine(review_env, gpu=gpu)
+        await main.review_analyze(main.ReviewReq(file="sample.sgf"))
+        await review_env.review_jobs["sample.sgf"]["task"]
+        budget = settings.DIFFICULTY_PRESETS["max"]["visits" if gpu else "cpu_visits"]
+        assert len(calls) == 5
+        for n, (hist, kwargs) in enumerate(calls):
+            assert hist == [(BLACK, 1), (WHITE, 0), (BLACK, 9), (WHITE, None)][:n]
+            assert kwargs == {
+                "to_move": WHITE if n % 2 else BLACK,
+                "max_visits": budget,
+                "size": 9,
+                "komi": 6.5,
+            }
+        events = [call.args[0] for call in review_env.broadcast.await_args_list]
+        assert [event["position"]["n"] for event in events[:-1]] == list(range(5))
+        assert [event["done"] for event in events[:-1]] == [1, 2, 3, 4, 5]
+        assert all(event["visits"] == budget for event in events[:-1])
+        assert events[-1]["type"] == "review_done"
+        data = json.loads((tmp_path / "sample.analysis.json").read_text(encoding="utf-8"))
+        assert data["visits"] == budget
+        assert data["perspective"] == "black"
+        assert data["positions"][1]["winrate_black"] == 0.61  # 轮白走也不翻转
+        assert review_env.review_jobs["sample.sgf"]["progress"] == 5
+        assert (await main.record_detail("sample.sgf"))["analysis"] == data
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", [None, "force", "budget", "model", "record", "legacy"])
+def test_review_reuses_sufficient_cache_and_upgrades_old_results(review_env, tmp_path, change):
+    async def run(force=False):
+        await main.review_analyze(main.ReviewReq(file="sample.sgf", force=force))
+        await review_env.review_jobs["sample.sgf"]["task"]
+
+    async def scenario():
+        _engine, calls = setup_review_engine(review_env)
+        await run()
+        path = tmp_path / "sample.analysis.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if change == "budget":
+            data["visits"] = 64
+        elif change == "model":
+            data["model"] = "old-model"
+        elif change == "record":
+            data["record_mtime_ns"] -= 1
+        elif change == "legacy":
+            del data["model"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        await run(force=change == "force")
+        assert len(calls) == (5 if change is None else 10)
+
+    asyncio.run(scenario())
+
+
+def test_review_duplicate_request_restores_progress_without_duplicate_search(review_env):
+    async def scenario():
+        engine, calls = setup_review_engine(review_env)
+        original = engine.analyze
+        started, release = asyncio.Event(), asyncio.Event()
+
+        async def analyze(moves, **kwargs):
+            if moves:
+                started.set()
+                await release.wait()
+            return await original(moves, **kwargs)
+
+        engine.analyze = analyze
+        await main.review_analyze(main.ReviewReq(file="sample.sgf"))
+        await started.wait()
+        response = await main.review_analyze(main.ReviewReq(file="sample.sgf"))
+        assert response["already_running"]
+        assert response["progress"] == 1
+        assert len(response["analysis"]["positions"]) == 1
+        release.set()
+        await review_env.review_jobs["sample.sgf"]["task"]
+        assert len(calls) == 5
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["switch", "error"])
+def test_review_interruption_keeps_previous_saved_curve(review_env, tmp_path, failure):
+    async def scenario():
+        engine, _calls = setup_review_engine(review_env)
+        await main.review_analyze(main.ReviewReq(file="sample.sgf"))
+        await review_env.review_jobs["sample.sgf"]["task"]
+        saved = (tmp_path / "sample.analysis.json").read_bytes()
+
+        async def analyze(*args, **kwargs):
+            if failure == "error":
+                raise EngineError(code="engine.exited")
+            review_env.engine.engine = object()
+            return Analysis(BLACK, 0.2, -2.0, [0.0] * 81)
+
+        engine.analyze = analyze
+        await main.review_analyze(main.ReviewReq(file="sample.sgf", force=True))
+        await review_env.review_jobs["sample.sgf"]["task"]
+        assert (tmp_path / "sample.analysis.json").read_bytes() == saved
+        assert review_env.broadcast.await_args.args[0]["type"] == "review_error"
+        assert "analysis" not in review_env.review_jobs["sample.sgf"]
+
+    asyncio.run(scenario())

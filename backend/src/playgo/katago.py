@@ -272,7 +272,7 @@ class KataGoEngine:
         max_visits: int,
         size: int = 19,
         komi: float = settings.KOMI,
-        timeout: float = 0.0,
+        timeout: float | None = 0.0,
         human_profile: str | None = None,
         include_policy: bool = False,
         max_time: float | None = None,
@@ -281,12 +281,12 @@ class KataGoEngine:
         """分析当前局面。moves 为已落子的历史（不含即将走的一手）。
 
         timeout<=0 时按 visits/后端自动估算（困难档 800 visits 在 GPU 上
-        也可能超过固定 60s）。
+        也可能超过固定 60s）；None 禁用总时限，仅供上层自行监测进展的推荐流使用。
         """
         if not self.ready:
             msg = "引擎未就绪"
             raise EngineError(msg, code="engine.not_ready")
-        if timeout <= 0:
+        if timeout is not None and timeout <= 0:
             timeout = self.auto_timeout(max_visits)
         rid = uuid.uuid4().hex[:12]
         payload: dict = {

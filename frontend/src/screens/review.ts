@@ -5,8 +5,9 @@ import { GoBoard } from "../board";
 import { errPayloadText, errText, t } from "../i18n";
 import type { MsgKey } from "../i18n";
 import type { GameState, HintData, RecordDetail, ReviewAnalysis, WsEvent } from "../types";
-import { coordName, showScreen, toast } from "../main";
+import { coordName, escapeHtml, showScreen, toast } from "../main";
 import { onGameEvent } from "./play";
+import { bindRecordImport } from "../record-import";
 
 const BLACK = 1;
 
@@ -23,6 +24,10 @@ let loadRequest = 0;
 let loading = false;
 let takeoverPending = false;
 let hintStatus: "loading" | "error" | null = null;
+let reviewRunning = false;
+let reviewProgress: { done: number; total: number; visits: number } | null = null;
+let reviewFailed = false;
+let curveResize: ResizeObserver | null = null;
 
 export function initReview(): void {
   const root = document.getElementById("screen-review")!;
@@ -35,16 +40,20 @@ export function initReview(): void {
       <div class="player-card">
         <div class="row"><span class="stone-ico w"></span><div><div class="p-name" id="rv-white"></div></div></div>
       </div>
+      <button class="btn" id="rv-import" data-record-import title="${t("rec.import_tip")}">${t("rec.import")}</button>
+      <input id="rv-import-file" type="file" accept=".sgf,application/x-go-sgf" hidden>
       <div class="rules-note" id="rv-meta"></div>
     </aside>
     <section class="board-wrap"><div class="board-frame"><canvas id="rv-canvas"></canvas></div></section>
     <aside class="panel right">
-      <div class="sec">
+      <div class="sec review-curve-sec">
         <h3>${t("rv.curve_title")}</h3>
         <div class="own-canvas-wrap"><canvas id="rv-curve" width="536" height="300"></canvas></div>
+        <div class="curve-axis"><span>0</span><span id="rv-curve-position"></span><span id="rv-curve-total">0</span></div>
         <div class="wr-now"><span>${t("rv.black_lead")}</span><span id="rv-curve-hint">${t("rv.curve_tip")}</span><span>${t("rv.white_lead")}</span></div>
+        <div id="rv-analysis-status" class="rules-note" role="status" aria-live="polite"></div>
       </div>
-      <div class="sec" style="flex:1;overflow-y:auto">
+      <div class="sec review-move-sec">
         <h3>${t("rv.analysis_title")}</h3>
         <div id="rv-moveinfo" style="font-size:13px;line-height:2.1">—</div>
       </div>
@@ -71,6 +80,7 @@ export function initReview(): void {
   board.clickableColor = null;
 
   const $ = (id: string) => document.getElementById(id)!;
+  bindRecordImport($("rv-import") as HTMLButtonElement, $("rv-import-file") as HTMLInputElement);
   $("rv-home").addEventListener("click", () => goto(0));
   $("rv-prev").addEventListener("click", () => goto(curIdx - 1));
   $("rv-next").addEventListener("click", () => goto(curIdx + 1));
@@ -100,21 +110,15 @@ export function initReview(): void {
     }
   });
   $("rv-takeover").addEventListener("click", doTakeover);
-  $("rv-analyze").addEventListener("click", async () => {
-    if (!detail) return;
-    try {
-      await api("/api/review/analyze", { file: detail.file });
-      toast(t("rv.started"));
-    } catch (e) {
-      toast(errText(e), true);
-    }
-  });
+  $("rv-analyze").addEventListener("click", () => void startAnalysis(true));
 
   const curve = $("rv-curve") as HTMLCanvasElement;
+  curveResize?.disconnect();
+  curveResize = new ResizeObserver(() => drawCurve());
+  curveResize.observe(curve);
   curve.addEventListener("click", (e) => {
     const r = curve.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * curve.width;
-    const n = Math.round(((x - 8) / (curve.width - 16)) * (detail?.moves.length ?? 0));
+    const n = Math.round(((e.clientX - r.left - 8) / (r.width - 16)) * (detail?.moves.length ?? 0));
     goto(Math.max(0, Math.min(detail?.moves.length ?? 0, n)));
   });
 
@@ -138,15 +142,30 @@ window.addEventListener("open-review", (e) => {
 });
 
 onWs((ev: WsEvent) => {
-  if (!detail) return;
+  if (!detail || loading) return;
   if (ev.type === "review_progress" && ev.file === detail.file) {
-    toast(t("rv.progress", { done: ev.done, total: ev.total }));
+    const firstProgress = reviewProgress === null;
+    reviewRunning = true;
+    reviewFailed = false;
+    reviewProgress = ev;
+    if (!analysis || ev.done === 1 || firstProgress) {
+      analysis = { file: ev.file, visits: ev.visits, perspective: "black", positions: [] };
+    }
+    analysis.positions[ev.position.n] = ev.position;
+    render();
   }
   if (ev.type === "review_done" && ev.file === detail.file) {
+    reviewRunning = false;
+    reviewProgress = null;
+    reviewFailed = false;
+    updateButtons();
     toast(t("rv.done"));
     void reloadAnalysis();
   }
   if (ev.type === "review_error" && ev.file === detail.file) {
+    reviewRunning = false;
+    reviewFailed = true;
+    updateButtons();
     toast(t("rv.failed", { msg: errPayloadText(ev.error) }), true);
   }
 });
@@ -157,6 +176,7 @@ export async function activateReview(): Promise<void> {
     const list = await api<{ file: string }[]>("/api/records").catch(() => []);
     if (list.length && !detail && !loading && request === loadRequest) await load(list[0].file);
   }
+  if (detail && !loading) void startAnalysis();
   if (hintToggle) void fetchHint();
 }
 
@@ -175,7 +195,7 @@ export function reapplyReview(): void {
   document.getElementById("rv-black")!.textContent = detail.black;
   document.getElementById("rv-white")!.textContent = detail.white;
   document.getElementById("rv-meta")!.innerHTML =
-    `${detail.date}<br>${t("rv.komi", { komi: detail.komi, result: detail.result || "?" })}<br>${t("rv.total_moves", { n: detail.moves.length })}`;
+    `${escapeHtml(detail.date)}<br>${t("rv.komi", { komi: detail.komi, result: escapeHtml(detail.result || "?") })}<br>${t("rv.total_moves", { n: detail.moves.length })}`;
   goto(curIdx);
 }
 
@@ -183,11 +203,56 @@ function updateButtons(): void {
   for (const id of ["rv-hint", "rv-terr", "rv-analyze", "rv-takeover"]) {
     (document.getElementById(id) as HTMLButtonElement).disabled = !detail || loading || takeoverPending;
   }
+  (document.getElementById("rv-analyze") as HTMLButtonElement).disabled ||= reviewRunning;
+  const status = document.getElementById("rv-analysis-status")!;
+  status.setAttribute("aria-busy", String(reviewRunning));
+  status.textContent = reviewFailed ? t("rv.analysis_failed")
+    : reviewRunning ? reviewProgress
+      ? t("rv.analysis_progress", reviewProgress) : t("rv.analysis_starting")
+    : analysis ? t("rv.analysis_complete", { visits: analysis.visits }) : "";
+}
+
+/** 自动进入只校验/升级缓存；显式点击可重新计算，同谱任务由后端去重。 */
+async function startAnalysis(force = false): Promise<void> {
+  if (!detail || loading || reviewRunning) return;
+  const file = detail.file;
+  const request = loadRequest;
+  reviewRunning = true;
+  reviewFailed = false;
+  updateButtons();
+  try {
+    const result = await api<{ already_running?: boolean; analysis?: ReviewAnalysis }>(
+      "/api/review/analyze", { file, force },
+    );
+    if (request !== loadRequest || detail?.file !== file) return;
+    // 重返仍在分析的棋谱时恢复此前全部进展，后续继续接收逐局面事件。
+    if (reviewRunning && result.analysis) {
+      const positions = result.analysis.positions.slice();
+      // HTTP 快照可能早于刚到达的 WS 进度：补全前缀，同时保留快照之后的新点。
+      if (reviewProgress && analysis && analysis.visits === result.analysis.visits) {
+        analysis.positions.forEach((position, n) => {
+          if (n >= positions.length) positions[n] = position;
+        });
+      }
+      analysis = { ...result.analysis, positions };
+      reviewProgress = { done: positions.length, total: detail.moves.length + 1, visits: analysis.visits };
+      render();
+    }
+  } catch (e) {
+    if (request !== loadRequest || detail?.file !== file) return;
+    reviewRunning = false;
+    reviewFailed = true;
+    updateButtons();
+    toast(errText(e), true);
+  }
 }
 
 async function load(file: string, moves = 0): Promise<void> {
   const request = ++loadRequest;
   loading = true;
+  reviewRunning = false;
+  reviewProgress = null;
+  reviewFailed = false;
   hintRequest++;
   hintData = null;
   hintStatus = null;
@@ -201,6 +266,7 @@ async function load(file: string, moves = 0): Promise<void> {
     curIdx = moves;
     loading = false;
     reapplyReview();
+    void startAnalysis();
   } catch (e) {
     if (request !== loadRequest) return;
     toast(errText(e), true);
@@ -232,6 +298,8 @@ function goto(n: number): void {
   curIdx = Math.max(0, Math.min(max, n));
   (document.getElementById("rv-slider") as HTMLInputElement).value = String(curIdx);
   document.getElementById("rv-label")!.textContent = `${curIdx} / ${max}`;
+  document.getElementById("rv-curve-position")!.textContent = `${curIdx} / ${max}`;
+  document.getElementById("rv-curve-total")!.textContent = String(max);
   render();
   syncHints();
 }
@@ -322,7 +390,7 @@ function render(): void {
   const grid = new Int8Array(N * N);
   replay(grid, detail, curIdx);
   const last = detail.moves[curIdx - 1];
-  board.setPosition(grid, last?.point ?? null, last ? 3 - last.color : BLACK);
+  board.setPosition(grid, last?.point ?? null, last ? 3 - last.color : detail.moves[0]?.color ?? BLACK);
 
   // 形势热力（后端 ownership 已统一为黑方视角）
   if (terrToggle && analysis && analysis.positions[curIdx]) {
@@ -333,6 +401,7 @@ function render(): void {
 
   // 本手分析
   const info = document.getElementById("rv-moveinfo")!;
+  info.innerHTML = `<span style="color:var(--ink-dim)">${t("rv.position_pending")}</span>`;
   if (!analysis) {
     info.innerHTML = `<span style="color:var(--ink-dim)">${t("rv.not_analyzed")}</span>`;
   } else if (curIdx === 0) {
@@ -372,6 +441,7 @@ function render(): void {
     const wr = hintData.to_play === BLACK ? blackWr : 1 - blackWr;
     info.innerHTML += `<br>${t("rv.hint_line", {
       coord: hintData.recommend_pass ? t("rv.pass_move") : coordName(m.point, N),
+      color: t(hintData.to_play === BLACK ? "stone.black" : "stone.white"),
       p: (wr * 100).toFixed(1),
     })}<br><small>${hintProgress(hintData)}</small>`;
   } else if (hintToggle) {
@@ -380,6 +450,7 @@ function render(): void {
     info.innerHTML += `<br>${t(key)}`;
   }
   drawCurve();
+  updateButtons();
 }
 
 /** 用完整规则重放到第 n 手（结果写入 grid；SGF 为合法对局）。 */
@@ -425,8 +496,14 @@ function drawCurve(): void {
   const cv = document.getElementById("rv-curve") as HTMLCanvasElement;
   if (!cv) return;
   const g = cv.getContext("2d")!;
-  const W = cv.width;
-  const H = cv.height;
+  const { width: W, height: H } = cv.getBoundingClientRect();
+  if (!W || !H) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+    cv.width = Math.round(W * dpr);
+    cv.height = Math.round(H * dpr);
+  }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
   // 黑优区（上半）淡蓝底 / 白优区（下半）淡红底 —— 两极直接标注
   g.fillStyle = "rgba(79,127,217,.08)";
@@ -441,14 +518,14 @@ function drawCurve(): void {
   g.lineTo(W, H / 2);
   g.stroke();
   g.setLineDash([]);
-  g.font = "600 20px Consolas,monospace";
+  g.font = "600 12px Consolas,monospace";
   g.fillStyle = "rgba(157,179,224,.75)";
-  g.fillText(t("stone.black"), 10, 26);
+  g.fillText(t("stone.black"), 10, 16);
   g.fillStyle = "rgba(230,178,150,.75)";
   g.fillText(t("stone.white"), 10, H - 12);
 
-  if (!analysis || analysis.positions.length < 2) return;
-  const total = analysis.positions.length - 1;
+  if (!analysis || analysis.positions.length < 1) return;
+  const total = Math.max(1, detail?.moves.length ?? 0);
   const px = (n: number) => 8 + (n / total) * (W - 16);
   const py = (v: number) => 8 + (1 - v) * (H - 16);
 
@@ -468,7 +545,7 @@ function drawCurve(): void {
   g.moveTo(cx, 4);
   g.lineTo(cx, H - 4);
   g.stroke();
-  const pos = analysis.positions[Math.min(curIdx, total)];
+  const pos = analysis.positions[curIdx];
   if (pos) {
     g.fillStyle = "#e8c860";
     g.beginPath();

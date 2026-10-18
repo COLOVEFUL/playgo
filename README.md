@@ -46,27 +46,73 @@ on your own machine, no account, no network required after setup.
   when it expires mid-turn (several can burn in one turn); loss when they run
   out (presets: 5:00 / 60:00 / free)
 - **Undo** — 1 move in PvP; in AI mode back to your previous turn (Ctrl+Z)
-- **Progressive AI hints** — top-3 candidates (or Pass), with win rates shown
-  from your side. A quick search retains the previous 200 GPU / 80 CPU visit
-  budget, reporting early results, then a deeper search updates the hints about
-  every 0.25 seconds. Deep budgets are **8,000 GPU / 1,600 CPU visits**, 10× the
-  Maximum opponent's budget on the same engine. Actual visits and search status
-  are visible. Each request has a **30-second total deadline**, including startup
-  and queueing; the quick/deep searches have 2/25-second engine time limits.
-  On timeout or interruption, keep the latest available hint. Slow hardware may
-  stop before surpassing Maximum; the UI says so. More search improves the basis
-  for a recommendation, but is not a guarantee that every move is better.
-  Moving, undoing, navigating away or turning hints off cancels the old search.
-  Queries respect the configured 100,000-visit engine ceiling, with room reserved
-  for search threads finishing; normal visit totals may slightly exceed a stage's
-  nominal budget. Hints use the active main model, without rank weakening.
+- **Progressive AI hints** — up to five candidates (or Pass), with your side's win
+  rate centered inside green markers, without letters or detached labels.
+  A **gold double ring identifies the engine's top pick**, independently of the
+  highest displayed win rate. Candidates within 3 percentage points of the best
+  displayed win rate share the opaque pine-green background; larger gaps make it
+  lighter and more transparent, reaching 25% opacity at 25 points behind. The wood
+  grain shows through, while a thin dark text outline keeps win rates readable. Rates are compared
+  from the side-to-play perspective. The top pick need not have the lightest color.
+  Color represents the win-rate gap, while actual visits and search status in
+  the sidebar show whether analysis is still deepening.
+  Play and review sidebars label the top pick and Black/White win rate; a preferred
+  Pass is shown as text. Narrow boards show rounded integer rates; hover for the full
+  percentage and top-pick/candidate status without a ghost stone covering the value.
+  Fewer candidates are shown when fewer are available.
+  One continuous search reports early results about every
+  **0.25 seconds** and keeps deepening toward the configured **100,000-visit**
+  engine ceiling on both CPU and GPU. It keeps the same search tree, with room
+  reserved below the ceiling for search threads finishing. Actual visits and
+  search status are visible; hints use the active main model without rank
+  weakening. A healthy search can run beyond 30 seconds while you think.
+  The first result has a **30-second wait limit**, including startup and queueing;
+  afterward, **15 seconds without any visit growth** stops the search and keeps
+  the latest available hint. Repeated reports with unchanged visits do not reset
+  this timeout. Moving, passing, undoing, starting a new game or entering scoring
+  actively terminates stale game hints on the server before scheduling new engine
+  work. Navigating away or turning hints off cancels the stream as well.
+  More search improves the basis for a recommendation but does not guarantee
+  that every move is better.
+  Enabling hints immediately shows calculating or waiting for your turn; failures
+  show a retry message. Requests for the same position share one search and new
+  subscribers receive its current progress, avoiding duplicate searches queueing
+  behind a long-running analysis.
 - **Territory estimation** — per-point ownership heatmap + win rate / score lead
 - **Auto-save** — finished games are written as SGF under `records/`
+- **Import local records** — click **Import SGF** in Records or the review screen
+  and select a local `.sgf` file (up to 2 MB). The imported record opens and starts
+  analysis automatically, without changing the current game. UTF-8 (including BOM)
+  and common SGF-declared encodings are supported; undeclared text tries UTF-8,
+  then GB18030. Each import gets a unique name under `records/imported/`, preserving
+  comments and variations without overwriting same-named files. Review follows the
+  first variation of the first game. Format, board size, komi and mainline legality
+  are checked before saving. Standard 2–19-line Go games are supported; setup stones,
+  handicap positions and explicit player-to-move properties are rejected with a message.
 - **AI review** — replay any saved game with a clickable win-rate curve,
-  per-move grading (brilliant → blunder), engine suggestions, and territory replay
-- **Review hints** — at any replay position, request live top-3 candidate moves
+  per-move grading (brilliant → blunder), engine suggestions, and territory replay.
+  **Opening a record starts analysis automatically**, using the active engine's
+  strongest AI budget per position: **800 visits on GPU / 160 on CPU**, regardless
+  of the game's rank setting. It evaluates N+1 positions from the empty board
+  through the last move, progressively drawing the curve and displaying progress
+  and budget. Its horizontal axis is moves
+  played; its vertical axis is always Black's win rate (100% at the top, 50% at
+  the center, 0% at the bottom). Adjacent positions are joined by straight lines,
+  without smoothing or alternating perspectives. The canvas fits the sidebar and
+  screen pixel density, displaying the entire record through its last move after
+  resizing. Start/current/end move labels and click-to-jump use the same full-game
+  scale. This batch analysis is separate
+  from live hints, which can search up to 100,000 visits at the current position;
+  enabling hints does not update the full-game curve. Complete results are saved
+  and reused for the same model and record version when their budget is sufficient.
+  Old 64-visit results and results from other models are upgraded automatically.
+  The **AI review** button retries failures or manually recalculates; duplicate
+  requests share an existing job. Analysis can continue in the background and uses
+  one engine instance throughout; an engine switch interrupts it without replacing
+  the previous complete result.
+- **Review hints** — at any replay position, request up to five live candidate moves
   with win rates and compare what you played against the engine's pick — no
-  full-game analysis needed first. Uses the same bounded progressive search;
+  full-game analysis needed first. Uses the same continuous, visit-capped search;
   completed results are cached for up to 64 positions, isolated by engine,
   record version, board size and komi
 - **Takeover** — take over any reviewed position and play it out yourself,
@@ -201,7 +247,7 @@ records are discarded. Switching languages preserves the board size and position
 
 REST: `GET /api/state` · `POST /api/game/new|move|pass|resign|undo|dead-stones|confirm-score` ·
 `GET /api/game/hint|territory` · `GET /api/records[/{file}]` · `POST /api/review/analyze` ·
-`GET /api/review/hint` · `POST /api/review/takeover` ·
+`GET /api/review/hint` · `GET /api/game/hint/stream` · `GET /api/review/hint/stream?file&moves` (NDJSON) · `POST /api/review/takeover` ·
 `GET /api/engines/status` · `POST /api/engines/download` · `POST /api/engines/select`
 
 WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,

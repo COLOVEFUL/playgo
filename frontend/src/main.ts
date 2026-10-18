@@ -57,6 +57,12 @@ export function closeDialog(): void {
   document.getElementById("overlay")!.classList.remove("show");
 }
 
+/** 外部棋谱的姓名/结果只显示为文字，不能成为HTML标签或属性。 */
+export function escapeHtml(text: string): string {
+  const entities: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  return text.replace(/[&<>"']/g, (char) => entities[char]);
+}
+
 export function showScreen(name: "menu" | "play" | "review"): void {
   document.querySelectorAll<HTMLElement>(".screen").forEach((s) => s.classList.remove("active"));
   document.getElementById(`screen-${name}`)!.classList.add("active");

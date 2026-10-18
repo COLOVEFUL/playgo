@@ -11,6 +11,7 @@ ENGINES_DIR = BASE_DIR / "engines"
 BUNDLED_DIR = ENGINES_DIR / "bundled"
 DOWNLOADED_DIR = ENGINES_DIR / "downloaded"
 RECORDS_DIR = PROJECT_DIR / "records"
+RECORD_IMPORT_MAX_BYTES = 2 * 1024 * 1024  # 本地SGF导入上限，流式读取防止无界内存占用
 FRONTEND_DIST = PROJECT_DIR / "frontend" / "dist"
 LOGS_DIR = ENGINES_DIR / "logs"
 
@@ -121,14 +122,16 @@ def normalize_difficulty(value: str) -> str:
 # AI 推荐 / 形势判断所用计算量（始终用当前可用最强引擎）
 HINT_VISITS = 200
 HINT_VISITS_CPU = 80
+HINT_MOVE_COUNT = 5  # 推荐落点数量；合法候选不足时返回实际数量，不凑数
 # 引擎配置的硬上限统一管理；推荐不修改模型，也不无限追加搜索。
 ENGINE_MAX_VISITS = 100_000
-HINT_DEEP_VISITS = 8_000
-HINT_DEEP_VISITS_CPU = 1_600
-HINT_QUICK_SECONDS = 2.0
-HINT_DEEP_SECONDS = 25.0
-HINT_TOTAL_SECONDS = 30.0  # 包含排队/启动等待；到时保留最新可用推荐
+HINT_FIRST_RESULT_SECONDS = 30.0  # 首批结果等待上限，含引擎启动/排队
+HINT_IDLE_SECONDS = 15.0  # 已有结果后，仅在 visits 持续不增长时超时
 HINT_REPORT_SECONDS = 0.25
 TERRITORY_VISITS = 120
 TERRITORY_VISITS_CPU = 60
-REVIEW_VISITS = 64  # 复盘批量分析每手的 visits（速度与质量折中）
+
+
+def review_visits(*, is_gpu: bool) -> int:
+    """整谱复盘逐局面预算跟随当前引擎最高难度，避免预置调整后两者脱节。"""
+    return DIFFICULTY_PRESETS["max"]["visits" if is_gpu else "cpu_visits"]
