@@ -4,9 +4,9 @@ import { api } from "../api";
 import { GoBoard } from "../board";
 import { sfx } from "../audio";
 import { errPayloadText, errText, t } from "../i18n";
-import type { MsgKey } from "../i18n";
+import { difficultyDetails, difficultyLabel, difficultySummary } from "../difficulty";
 import type { GameState, HintData, TerritoryData, WsEvent } from "../types";
-import { closeDialog, coordName, fmtClock, showDialog, showScreen, toast } from "../main";
+import { closeDialog, coordName, engineStatus, fmtClock, showDialog, showScreen, toast } from "../main";
 
 const BLACK = 1;
 
@@ -19,11 +19,6 @@ let terrMoveCount = -1;
 let els: Record<string, HTMLElement> = {};
 let winrateHist: { n: number; wr: number }[] = [];
 
-const DIFF_KEY: Record<string, MsgKey> = {
-  easy: "diff.easy",
-  medium: "diff.medium",
-  hard: "diff.hard",
-};
 
 export function initPlay(): void {
   const root = document.getElementById("screen-play")!;
@@ -43,6 +38,7 @@ export function initPlay(): void {
         <div class="clock" id="clock-w">30:00</div>
       </div>
       <div class="rules-note" id="rules-note"></div>
+      <div class="strength-note" id="strength-info"></div>
     </aside>
     <section class="board-wrap"><div class="board-frame"><canvas id="play-canvas"></canvas></div></section>
     <aside class="panel right">
@@ -404,7 +400,9 @@ function applyState(s: GameState, force = false): void {
   updateClocks(s.clocks);
 
   // 顶栏角标
-  const diff = t(DIFF_KEY[s.difficulty] ?? "diff.medium");
+  const diff = difficultyLabel(s.difficulty, s.ai_style);
+  els.chip.title = s.mode === "ai" ? difficultyDetails(s.difficulty, engineStatus, s.ai_style) : "";
+  document.getElementById("strength-info")!.textContent = s.mode === "ai" ? difficultySummary(s.difficulty, engineStatus, s.ai_style) : "";
   els.chip.style.display = "";
   els.chip.textContent =
     s.mode === "ai"
@@ -625,6 +623,13 @@ function showResultDialog(s: GameState): void {
 // ── WS 事件入口（由 main 转发） ──
 export function onGameEvent(ev: WsEvent): void {
   switch (ev.type) {
+    case "engine":
+    case "engine_restarted":
+      if (state?.mode === "ai") {
+        els.chip.title = difficultyDetails(state.difficulty, ev.engine, state.ai_style);
+        document.getElementById("strength-info")!.textContent = difficultySummary(state.difficulty, ev.engine, state.ai_style);
+      }
+      break;
     case "state":
       applyState(ev.game);
       break;

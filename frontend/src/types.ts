@@ -45,6 +45,7 @@ export interface GameState {
   id: string;
   mode: "pvp" | "ai";
   difficulty: string;
+  ai_style: "rank" | "human";
   human_color: number;
   ai_color: number | null;
   komi: number;
@@ -147,7 +148,9 @@ export interface EnginePackageInfo {
 
 export interface EngineStatus {
   available: boolean;
-  engine: { exe: string; model: string; backend: string; gpu: boolean } | null;
+  engine: { exe: string; model: string; backend: string; gpu: boolean; human_model?: string | null } | null;
+  human_sl: { model: string; installed: boolean; loaded: boolean; size_mb: number };
+  difficulties: { id: string; strategy: "human" | "best"; visits: number; cpu_visits: number; quick: boolean }[];
   /** 用户选中的包（实际运行可能是回落包，见 packages[].active） */
   selected: string;
   packages: EnginePackageInfo[];

@@ -3,7 +3,7 @@
 [English](README.md) · [中文](README.zh-CN.md)
 
 A local Go (weiqi/baduk) game with a **KataGo-powered AI**
-offering three strength levels, live AI hints and territory estimation,
+offering 20K–9D human-style rank profiles, live AI hints and territory estimation,
 byo-yomi clocks, undo, automatic SGF saving and AI deep review — all running
 on your own machine, no account, no network required after setup.
 
@@ -12,13 +12,34 @@ on your own machine, no account, no network required after setup.
 ## ✨ Features
 
 - **Local two-player** — hot-seat play, black first, Chinese (area) scoring
-- **Play vs AI** — three levels on the official KataGo `b18c384nbt` network:
+- **Play vs AI** — **20K/15K/10K/5K/1K/1D/3D/5D/7D/9D**, plus
+  **Maximum**. The default is Quick practice at 10K. Kyu counts down as strength increases; dan counts up.
 
-  | Level | Approx. strength | How |
+  | Level | Model and method | Limits |
   |---|---|---|
-  | Easy 简单 | ~15k–5k | tiny visit budget + wide policy sampling (plays plausible, human-like mistakes) |
-  | Medium 中等 | ~amateur 1–4 dan | medium budget + narrow sampling |
-  | Hard 困难 | superhuman | 800 visits (GPU), best move |
+  | Quick practice: 15K/10K/5K/1K/1D/3D | Existing main model, KaTrain-style calibrated rank algorithm, 1 visit | Estimates only; calibration does not transfer unchanged across models |
+  | Human style: 20K–9D presets | Official Human SL `b18c384nbt-humanv0`, original-probability policy sampling | Human-style targets, not PlayGo match-calibrated ranks; high-dan strength may fall short |
+  | Maximum, CPU | `lionffen_b6c64`, best searched move, 160 visits | Model-dependent, no fixed dan claim |
+  | Maximum, GPU | `kata1-b18c384nbt`, best searched move, 800 visits | Stronger model/search budget, no fixed dan claim |
+
+  Quick practice needs no additional model. Choose **Human style** and download
+  its optional model (~95MB) to use human-style targets; the new-game dialog also links to this download. Without it,
+  Quick practice and Maximum remain available using your existing main model. The download restarts
+  the engine automatically. Human-style play uses the same 18-block, 384-channel human
+  model on CPU and GPU; CPU inference may be slower than the lite model. The main
+  model uses 64 visits only to decide when to pass. Hints and review still use the
+  main model at their own analysis budgets.
+
+  These labels follow [KataGo's Human SL profiles and recommended sampling recipe](https://github.com/lightvector/KataGo/blob/v1.18.1/docs/Analysis_Engine.md#human-sl-analysis-guide),
+  also used by [KaTrain's human-like AI](https://github.com/sanderland/katrain#ais).
+  Human-style labels are 19×19 imitation targets. Quick practice adapts KaTrain’s
+  calibrated-rank candidate-count formula, uniform sampling without replacement,
+  and key-move/endgame safeguards; it stays within the reference 15K–3D range.
+  PlayGo has not match-calibrated either mode. Neither mode gives equivalents of Chinese rank certificates
+  or any particular server's ranks; **9D is not professional 9 dan**. Raw high-dan
+  policy can be weaker than its target, especially in complex fights. The dialog
+  shows the actual main model, network scale (`b` = blocks, `c` = channels), backend
+  and visit budget; the game sidebar follows the active engine, including fallback.
 
 - **Clock & byo-yomi** — default 30:00 main time, then 60 s ×3 Japanese-style
   byo-yomi: each turn restarts at a full period, and a period is spent only
@@ -112,7 +133,7 @@ records are discarded. Switching languages preserves the board size and position
 │   │   │                   JSON-line protocol, perspective pinned to Black
 │   │   │                   (reportAnalysisWinratesAs=BLACK — winrate/scoreLead/
 │   │   │                   ownership arrive black-viewpoint, no flipping),
-│   │   │                   difficulty = visit budget + policy-pow sampling
+│   │   │                   ranks = Human SL policy; Maximum = main-model search
 │   │   ├── main.py         FastAPI app: REST + /ws, AI move orchestration,
 │   │   │                   auto dead-stone detection, review batch analysis,
 │   │   │                   review hints & position takeover
@@ -120,7 +141,7 @@ records are discarded. Switching languages preserves the board size and position
 │   │   ├── sgf.py          SGF (FF4) writer/parser + records library
 │   │   └── settings.py     Time presets, difficulty table, engine-package
 │   │                       registry, official download URLs
-│   ├── tests/              51 tests: rules, ko, scoring, clocks/byo-yomi timeout,
+│   ├── tests/              Tests: rules, ko, scoring, clocks/byo-yomi timeout,
 │   │                       engine normalization (black-perspective),
 │   │                       engine-package selection & defaulting
 │   └── engines/            Runtime home of katago.exe + networks (git-ignored)
@@ -148,7 +169,7 @@ records are discarded. Switching languages preserves the board size and position
    via `rules.py`, settles the mover's clock, records the move.
 3. The new state is broadcast on `/ws`; the frontend animates the stone and
    any captures, plays the synthesized sound.
-4. In AI mode `schedule_ai()` asks the engine for a move at the difficulty's
+4. In AI mode `schedule_ai()` asks the engine for a move at the selected rank's
    visit budget; the reply is validated against turn state (so undo/new-game
    races can't corrupt the game) and applied the same way.
 5. Hints / territory are `GET` queries with a cache keyed by the full move
@@ -178,7 +199,7 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
 | Layer | Choice | Why |
 |---|---|---|
 | Backend | **Python 3.11+ / FastAPI / uvicorn** | subprocess management and async I/O for the engine pipes; typed request models; first-class WebSocket |
-| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** (51 tests) | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
+| Backend tooling | **uv** (deps + venv), **ruff** (lint/format), **pytest** | modern, fast, one-file config; the package builds via `uv_build` so `uv run uvicorn playgo.main:app` just works |
 | Frontend | **TypeScript + Canvas 2D, Vite** | a Go board is one big custom-drawn surface; no framework overhead (~40 KB gz), full control of rendering, DPR-correct drawing |
 | Charts | hand-rolled canvas lines, colors validated for CVD | the win-rate curve is one diverging series; a charting library would outweigh it |
 | Audio | WebAudio synthesis | zero audio assets to license or ship |
@@ -191,11 +212,17 @@ WS `/ws` events: `state`, `clocks`, `engine`, `download`, `saved`,
   (`katago analysis -config … -model …`), speaks its documented JSON-line
   protocol over stdin/stdout, and terminates it on shutdown.
   One persistent process serves every need: AI moves, hints, territory,
-  review analysis — queries differ only in visit budget and sampling.
-- **Difficulty** is implemented per query: `maxVisits` caps the search and the
-  move is either taken as-is (hard) or sampled from the top-k candidate moves
-  with weights `prior^p` (easy/medium) — this reproduces human-like
-  inaccuracy at low cost on a single strong network.
+  review analysis. When installed, the auxiliary human model is loaded via
+  `-human-model` in this same process.
+- **Difficulty** uses per-query `humanSLProfile=rank_*`, `includePolicy=true`,
+  and `ignorePreRootHistory=false`. Ranked moves sample the full `humanPolicy`
+  after legal-move filtering; the main model's top pass is respected. Maximum
+  takes the main model's best move. Missing human policies raise an explicit
+  error, preserving the selected rank. Old API IDs `easy/medium/hard` migrate
+  to `15k/1d/max` (a strategy migration, not a strength equivalence).
+  `ai_style=rank|human` selects Quick practice or Human style; default `rank`.
+  Quick practice requests the main network policy with 1 visit, with no Human SL
+  dependency. Unsupported combinations and missing policies fail explicitly.
 - **Black-viewpoint contract**: the subprocess is started with
   `reportAnalysisWinratesAs=BLACK` (the same value the official config ships
   since v1.13), so every winrate, score lead and ownership value — for AI
@@ -271,8 +298,12 @@ can be switched to at any time with one click (the engine process restarts;
 switching mid-game is safe). If you skip downloading, AI features will prompt
 for it when first needed.
 
-To distribute a fully offline copy: run the downloads once, then
-`package.bat` → `dist-app/PlayGo` (engines and license texts included).
+To distribute the default CPU-only offline copy: download the CPU package, then
+`package.bat` → `dist-app/PlayGo` (CPU engine/model and license texts included).
+
+The default `package.bat` distribution includes only the CPU lite engine and model.
+GPU (~100MB) and Human SL (~95MB) downloads are optional, performed in the app;
+even if installed on the packaging machine they are excluded from the release.
 
 ### Development mode
 

@@ -37,12 +37,15 @@ URL_STRONG_MODEL = (
     "kata1-b18c384nbt-s9996604416-d4316597426.bin.gz"
 )
 STRONG_MODEL_NAME = "kata1-b18c384nbt.bin.gz"
+HUMAN_MODEL_NAME = "b18c384nbt-humanv0.bin.gz"
+URL_HUMAN_MODEL = (
+    "https://github.com/lightvector/KataGo/releases/download/v1.15.0/b18c384nbt-humanv0.bin.gz"
+)
 
 # CPU 轻量网络：官方 Extra Networks 的 lionffen b6c64（约 2MB，19x19 专用，
 # 强度约等于历史 10 层网络）。保留 .txt.gz 真实扩展名——官方即旧格式。
 URL_LITE_MODEL = (
-    "https://media.katagotraining.org/uploaded/networks/models_extra/"
-    "lionffen_b6c64_3x3_v10.txt.gz"
+    "https://media.katagotraining.org/uploaded/networks/models_extra/lionffen_b6c64_3x3_v10.txt.gz"
 )
 LITE_MODEL_NAME = "lionffen_b6c64.txt.gz"
 
@@ -96,32 +99,24 @@ class TimeSettings:
         }
 
 
-# ── AI 难度档位（难度文案由前端词典提供，键即 difficulty） ──────────
-# visits     : 引擎搜索量上限
-# sample_top : 采样候选宽度（取 moveInfos 前 N）
-# prior_pow  : 先验概率幂次（<1 越小越“平”，越容易走出人类的随手棋）
-# GPU/CPU 自适应：CPU(Eigen) 下 hard 的 visits 会自动降到 cpu_visits
+# ── AI 段级位（Human SL / KaTrain 快速估计，均未经本项目实战校准） ─────────────
+# rank_* 是人类棋风目标，非中国考段认证；高段原始策略可能达不到目标棋力。
+# 64 visits 仅让主网络判断何时停一手；落点始终按完整 humanPolicy 原概率采样，
+# 不截取搜索候选、不改变温度、不混入主网络最优点，避免无依据改变等级。
+DEFAULT_DIFFICULTY = "10k"
 DIFFICULTY_PRESETS: dict[str, dict] = {
-    "easy": {
-        "visits": 4,
-        "cpu_visits": 4,
-        "pick": "sample",
-        "sample_top": 14,
-        "prior_pow": 0.30,
-    },
-    "medium": {
-        "visits": 48,
-        "cpu_visits": 32,
-        "pick": "sample",
-        "sample_top": 4,
-        "prior_pow": 0.70,
-    },
-    "hard": {
-        "visits": 800,
-        "cpu_visits": 160,
-        "pick": "best",
-    },
+    rank: {"pick": "human", "profile": f"rank_{rank}", "visits": 64, "cpu_visits": 64}
+    for rank in ("20k", "15k", "10k", "5k", "1k", "1d", "3d", "5d", "7d", "9d")
 }
+DIFFICULTY_PRESETS["max"] = {"pick": "best", "visits": 800, "cpu_visits": 160}
+QUICK_RANKS = {"15k": 15, "10k": 10, "5k": 5, "1k": 1, "1d": 0, "3d": -2}
+# 兼容旧 API 调用；旧档位没有可靠等级，统一迁移到明确的新策略。
+DIFFICULTY_ALIASES = {"easy": "15k", "medium": "1d", "hard": "max"}
+
+
+def normalize_difficulty(value: str) -> str:
+    return DIFFICULTY_ALIASES.get(value, value)
+
 
 # AI 推荐 / 形势判断所用计算量（始终用当前可用最强引擎）
 HINT_VISITS = 200

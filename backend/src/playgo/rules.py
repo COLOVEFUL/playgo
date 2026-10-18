@@ -111,7 +111,7 @@ class Board:
 
     def play(self, color: int, point: int | None) -> PlayResult:
         """落子或停一手。非法时抛 IllegalMove。"""
-        if point is PASS:
+        if point is None:
             self.consecutive_passes += 1
             self.last_point = None
             self.move_count += 1

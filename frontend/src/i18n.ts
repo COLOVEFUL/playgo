@@ -70,6 +70,12 @@ export function t(key: MsgKey, params?: Record<string, string | number>): string
 
 // ── 错误码 → 文案（与后端 errors.py 的 code 一一对应） ──
 const ERR_KEY: Record<string, MsgKey> = {
+  "game.bad_difficulty": "err.game_bad_difficulty",
+  "game.quick_rank_unavailable": "err.game_quick_rank_unavailable",
+  "engine.policy_missing": "err.engine_policy_missing",
+  "engine.human_model_required": "err.engine_human_model_required",
+  "engine.human_policy_missing": "err.engine_human_policy_missing",
+  "engine.human_board_size": "err.engine_human_board_size",
   "game.not_started": "err.game_not_started",
   "game.ended": "err.game_ended",
   "game.not_your_turn": "err.game_not_your_turn",

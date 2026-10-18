@@ -115,6 +115,7 @@ def test_pass_then_scoring_flow():
     assert g.status == "scoring"
     g.enter_scoring(set())
     # 点目预览只含数值/枚举，无显示文案
+    assert g.score_preview is not None
     assert "text" not in g.score_preview
     assert g.score_preview["winner"] in (BLACK, WHITE, 0)
     r = g.confirm_score()

@@ -9,6 +9,8 @@ PlayGo 自身代码以 MIT 许可发布（见仓库根 LICENSE）。以下为 Pl
 |---|---|---|---|
 | [KataGo](https://github.com/lightvector/KataGo) v1.18.1（OpenCL / Eigen 官方发行 exe） | 围棋 AI 引擎，作为独立子进程调用（不链接其代码） | MIT | `KATAGO-ENGINE-LICENSE.txt` |
 | [kata1-b18c384nbt](https://katagotraining.org/networks/) 神经网络 | 引擎权重，来自 katagotraining.org 官方发布 | KataGo Neural Network License（MIT 式） | `KATAGO-NETWORK-LICENSE.txt` |
+| [b18c384nbt-humanv0](https://github.com/lightvector/KataGo/releases/tag/v1.15.0) 人类棋风网络 | 20K～9D 人类策略，按需下载约95MB | KataGo Neural Network License（MIT 式） | `KATAGO-NETWORK-LICENSE.txt` |
+| [KaTrain](https://github.com/sanderland/katrain) Calibrated Rank 算法 | 快速练习的等级候选数公式及关键着/收官保护适配 | MIT | `KATRAIN-LICENSE.txt` |
 
 说明：KataGo 发行 zip 内已包含其自身第三方库（clblast、half、nlohmann_json 等）
 的许可文件，随发行包原样分发即满足要求。引擎与模型不入 git 仓库，首次使用时

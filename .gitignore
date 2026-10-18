@@ -17,6 +17,7 @@ backend/engines/**/katago.exe
 backend/engines/**/*.dll
 backend/engines/**/*.cfg
 backend/engines/opencltuning*
+backend/engines/**/KataGoData/
 backend/engines/choice.json
 
 # 运行产物

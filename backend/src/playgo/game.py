@@ -26,7 +26,8 @@ STATUS_ENDED = "ended"
 @dataclass
 class GameConfig:
     mode: str = MODE_PVP  # pvp | ai
-    difficulty: str = "medium"  # ai 模式
+    difficulty: str = settings.DEFAULT_DIFFICULTY  # ai 模式
+    ai_style: str = "rank"  # rank=快速估计，human=官方人类棋风
     human_color: int = BLACK  # ai 模式下人类执子
     komi: float = settings.KOMI
     size: int = settings.BOARD_SIZE  # 常规对局恒 19；复盘接管可来自小棋盘棋谱
@@ -94,6 +95,7 @@ class GameSession:
             "id": self.id,
             "mode": self.cfg.mode,
             "difficulty": self.cfg.difficulty,
+            "ai_style": self.cfg.ai_style,
             "human_color": self.cfg.human_color,
             "ai_color": self.cfg.ai_color(),
             "komi": self.cfg.komi,
@@ -397,7 +399,7 @@ class GameSession:
         }
         ai_color = cfg.ai_color()
         if ai_color:
-            names[ai_color] = f"KataGo ({cfg.difficulty})"
+            names[ai_color] = f"KataGo ({cfg.difficulty}, {cfg.ai_style})"
         return SgfGame(
             size=self.board.size,
             komi=cfg.komi,

@@ -10,12 +10,12 @@ import time
 sys.path.insert(0, "src")
 
 from playgo import settings
-from playgo.katago import EngineManager, from_kata_coords, read_choice, to_kata_coords
+from playgo.katago import EngineManager, KataGoEngine, from_kata_coords, read_choice, to_kata_coords
 from playgo.rules import BLACK
 
 # Windows GBK 控制台打不出 ✓/✅ 等字符时的兜底
 if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # ty: ignore[unresolved-attribute]
 
 
 def test_coords() -> None:
@@ -25,6 +25,23 @@ def test_coords() -> None:
     assert from_kata_coords("D16") == 3 + 3 * 19
     assert from_kata_coords("Q17") == 15 + 2 * 19
     print("[OK] 坐标转换")
+
+
+async def test_difficulties(engine: KataGoEngine, moves: list[tuple[int, int | None]]) -> None:
+    for rank in settings.QUICK_RANKS:
+        point, ana = await engine.pick_move(
+            moves[:2], to_move=1, difficulty=rank, size=19, komi=settings.KOMI, style="rank"
+        )
+        assert len(ana.policy) == 362
+        print(f"[OK] 快速练习 {rank} 选点 {point}")
+    diffs = ("20k", "10k", "1d", "9d", "max") if engine.human_model else ("max",)
+    for diff in diffs:
+        t0 = time.monotonic()
+        pt, ana = await engine.pick_move(
+            moves[:2], to_move=1, difficulty=diff, size=19, komi=settings.KOMI
+        )
+        assert diff == "max" or len(ana.human_policy) == 362
+        print(f"[OK] {diff} 选点 {pt} 用时 {time.monotonic() - t0:.1f}s")
 
 
 async def main() -> None:
@@ -57,7 +74,7 @@ async def main() -> None:
     # 引擎输出已钉死黑方视角，轮谁走都不翻转；若回归“按行棋方翻转”的旧 bug
     # 会在此直接断言失败。注意取“棋子本点”而非 2-2 空点：后者常因预期点三三
     # 入侵被网络判为对方势力，符号不稳定，不能用作视角校验。
-    moves = [(1, 3 + 3 * 19), (2, 15 + 15 * 19), (1, 15 + 3 * 19)]
+    moves: list[tuple[int, int | None]] = [(1, 3 + 3 * 19), (2, 15 + 15 * 19), (1, 15 + 3 * 19)]
     t0 = time.monotonic()
     ana2 = await engine.analyze(moves, to_move=2, max_visits=40)
     own = ana2.ownership
@@ -76,10 +93,7 @@ async def main() -> None:
     )
 
     # AI 选点（各难度）
-    for diff in ("easy", "medium", "hard"):
-        t0 = time.monotonic()
-        pt, _ = await engine.pick_move(moves[:2], to_move=1, difficulty=diff)
-        print(f"[OK] {diff} 选点 {pt} 用时 {time.monotonic() - t0:.1f}s")
+    await test_difficulties(engine, moves)
 
     # ── 引擎包切换往返：CPU 轻量包（.txt.gz 旧格式端到端加载）→ 切回 GPU ──
     cpu_pkg, gpu_pkg = settings.PACKAGES["cpu"], settings.PACKAGES["gpu"]

@@ -2,6 +2,9 @@
 
 协议约定：所有面向用户的错误（REST detail / WS 事件）只携带
 ``{"code": <稳定码>, "args": <插值参数>}``；中文 message 仅供日志。
+难度相关：game.bad_difficulty；engine.human_model_required / human_policy_missing /
+human_board_size。段级位不可用时明确报错，不得静默替换为最强 AI。
+快速练习不可用等级：game.quick_rank_unavailable；主网策略异常：engine.policy_missing。
 """
 
 from __future__ import annotations

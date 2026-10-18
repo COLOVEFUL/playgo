@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import random
 import subprocess
 import sys
@@ -21,7 +22,8 @@ from typing import TYPE_CHECKING, TypeVar
 from playgo import settings
 from playgo.downloader import installed, item_size
 from playgo.errors import PlayGoError
-from playgo.rules import BLACK
+from playgo.rules import BLACK, Board
+from playgo.strength import quick_move
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -60,6 +62,9 @@ class Analysis:
     best_moves: list[dict] = field(default_factory=list)
     # 每项: {point, order, prior, winrate_black, score_lead_black, pv:[(color,point)]}
     visits: int = 0
+    human_policy: list[float] = field(default_factory=list)
+    policy: list[float] = field(default_factory=list)
+    top_is_pass: bool = False  # 保留搜索第一候选的 pass，推荐列表仍只包含落点
 
 
 class EngineError(PlayGoError):
@@ -73,6 +78,8 @@ class KataGoEngine:
         self.exe = exe
         self.model = model
         self.backend = backend  # "eigen" | "opencl"
+        human_path = settings.DOWNLOADED_DIR / settings.HUMAN_MODEL_NAME
+        self.human_model = human_path if human_path.exists() else None
         self.proc: asyncio.subprocess.Process | None = None
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._reader: asyncio.Task | None = None
@@ -96,6 +103,7 @@ class KataGoEngine:
             "model": self.model.name,
             "backend": self.backend,
             "gpu": self.is_gpu,
+            "human_model": self.human_model.name if self.human_model else None,
         }
 
     async def start(self) -> None:
@@ -129,6 +137,8 @@ class KataGoEngine:
                 "-override-config",
                 overrides,
             ]
+            if self.human_model:
+                cmd.extend(["-human-model", str(self.human_model)])
             log.info("启动引擎: %s", " ".join(cmd))
             try:
                 self.proc = await asyncio.create_subprocess_exec(
@@ -256,6 +266,8 @@ class KataGoEngine:
         size: int = 19,
         komi: float = settings.KOMI,
         timeout: float = 0.0,
+        human_profile: str | None = None,
+        include_policy: bool = False,
     ) -> Analysis:
         """分析当前局面。moves 为已落子的历史（不含即将走的一手）。
 
@@ -282,7 +294,15 @@ class KataGoEngine:
             "boardYSize": size,
             "rules": "chinese",
             "komi": komi,
+            "initialPlayer": "B" if (moves[0][0] if moves else to_move) == BLACK else "W",
         }
+        if human_profile or include_policy:
+            payload["includePolicy"] = True
+        if human_profile:
+            payload["overrideSettings"] = {
+                "humanSLProfile": human_profile,
+                "ignorePreRootHistory": False,
+            }
         fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
         try:
@@ -314,7 +334,8 @@ class KataGoEngine:
         root = data.get("rootInfo", {})
         ownership = list(data.get("ownership") or [0.0] * (size * size))
         best: list[dict] = []
-        for m in sorted(data.get("moveInfos", []), key=lambda m: m.get("order", 99)):
+        ordered = sorted(data.get("moveInfos", []), key=lambda m: m.get("order", 99))
+        for m in ordered:
             mv = m.get("move", "")
             if not mv or mv.lower() == "pass":
                 continue
@@ -339,6 +360,9 @@ class KataGoEngine:
             ownership=ownership,
             best_moves=best,
             visits=root.get("visits", 0),
+            human_policy=list(data.get("humanPolicy") or []),
+            policy=list(data.get("policy") or []),
+            top_is_pass=bool(ordered and ordered[0].get("move", "").lower() == "pass"),
         )
 
     # ── AI 行棋（按难度） ────────────────────────────────
@@ -351,28 +375,78 @@ class KataGoEngine:
         *,
         size: int = 19,
         komi: float = settings.KOMI,
+        style: str = "human",
     ) -> tuple[int | None, Analysis]:
         """按难度选点。返回 (落点(None=停一手), 分析结果)。"""
+        difficulty = settings.normalize_difficulty(difficulty)
+        if difficulty not in settings.DIFFICULTY_PRESETS:
+            msg = "未知难度"
+            raise EngineError(msg, code="game.bad_difficulty")
         preset = settings.DIFFICULTY_PRESETS[difficulty]
+        human = preset["pick"] == "human" and style == "human"
+        quick = preset["pick"] == "human" and style == "rank"
+        if style not in {"rank", "human"} or (quick and difficulty not in settings.QUICK_RANKS):
+            msg = "快速模式不支持此段级位"
+            raise EngineError(msg, code="game.quick_rank_unavailable")
+        if human and not self.human_model:
+            msg = "缺少人类棋风模型"
+            raise EngineError(msg, code="engine.human_model_required")
+        if human and size != settings.BOARD_SIZE:
+            msg = "人类段级位只适用于十九路"
+            raise EngineError(msg, code="engine.human_board_size")
         visits = preset["cpu_visits"] if not self.is_gpu else preset["visits"]
+        if quick:
+            visits = 1
         ana = await self.analyze(
-            moves, to_move=to_move, max_visits=visits, size=size, komi=komi
+            moves,
+            to_move=to_move,
+            max_visits=visits,
+            size=size,
+            komi=komi,
+            human_profile=preset["profile"] if human else None,
+            include_policy=quick,
         )
-        point = self._choose(ana, preset)
+        legal = None
+        if human or quick:
+            board = Board(size=size, komi=komi)
+            for color, point in moves:
+                board.play(color, point)
+            legal = set(board.legal_moves(to_move))
+        if quick:
+            if (
+                len(ana.policy) != size * size + 1
+                or not all(math.isfinite(w) for w in ana.policy)
+                or not any(w > 0 for w in ana.policy)
+            ):
+                msg = "无有效策略"
+                raise EngineError(msg, code="engine.policy_missing")
+            assert legal is not None
+            return quick_move(ana.policy, legal, settings.QUICK_RANKS[difficulty]), ana
+        point = self._choose(ana, preset, legal)
         return point, ana
 
-    def _choose(self, ana: Analysis, preset: dict) -> int | None:
-        if not ana.best_moves:
-            return None  # 无棋可走 → 停一手
-        pick_mode = preset.get("pick", "best")
-        if pick_mode == "best":
-            return ana.best_moves[0]["point"]
-        # 采样：前 sample_top 候选，权重 prior^pow（平化先验，制造人类式失误）
-        top = ana.best_moves[: preset.get("sample_top", 5)]
-        pw = preset.get("prior_pow", 1.0)
-        weights = [max(m["prior"], 1e-4) ** pw for m in top]
-        chosen = random.choices(top, weights=weights, k=1)[0]
-        return chosen["point"]
+    def _choose(self, ana: Analysis, preset: dict, legal: set[int] | None = None) -> int | None:
+        if preset["pick"] == "human":
+            msg = "无有效人类策略"
+            # 缺字段/模型不兼容必须报错，绝不静默用超强主网络替代目标等级。
+            if len(ana.human_policy) != settings.BOARD_SIZE**2 + 1:
+                raise EngineError(msg, code="engine.human_policy_missing")
+            if ana.top_is_pass:
+                return None
+            choices = [
+                (p, weight)
+                for p, weight in enumerate(ana.human_policy[:-1])
+                if math.isfinite(weight) and weight > 0 and (legal is None or p in legal)
+            ]
+            if not choices:
+                if legal:
+                    raise EngineError(msg, code="engine.human_policy_missing")
+                return None
+            points, weights = zip(*choices, strict=True)
+            return random.choices(points, weights=weights, k=1)[0]
+        if ana.top_is_pass or not ana.best_moves:
+            return None
+        return ana.best_moves[0]["point"]
 
 
 # ── 引擎包选择持久化（backend/engines/choice.json）──────────────────
@@ -432,7 +506,7 @@ class EngineManager:
 
     def _package_view(self, pkg: settings.EnginePackage) -> dict:
         """单包状态视图（缺失项 + 汇总量，供前端渲染包卡片）。"""
-        missing = [
+        missing: list[dict] = [
             {"id": i, "size_mb": item_size(i)} for i in pkg.items if not installed(i)
         ]
         return {
@@ -452,6 +526,22 @@ class EngineManager:
             "engine": self.engine.describe() if self.engine else None,
             "selected": self.selected_id,
             "packages": [self._package_view(p) for p in settings.PACKAGES.values()],
+            "human_sl": {
+                "model": settings.HUMAN_MODEL_NAME,
+                "installed": installed("human-model"),
+                "loaded": bool(self.engine and self.engine.ready and self.engine.human_model),
+                "size_mb": item_size("human-model"),
+            },
+            "difficulties": [
+                {
+                    "id": rank,
+                    "strategy": preset["pick"],
+                    "visits": preset["visits"],
+                    "cpu_visits": preset["cpu_visits"],
+                    "quick": rank in settings.QUICK_RANKS or rank == "max",
+                }
+                for rank, preset in settings.DIFFICULTY_PRESETS.items()
+            ],
         }
 
     async def ensure_started(self) -> KataGoEngine:
@@ -533,8 +623,12 @@ class EngineManager:
     ) -> Analysis:
         return await self._retry_on_wedge(
             lambda engine: engine.analyze(
-                moves, to_move=to_move, max_visits=max_visits,
-                size=size, komi=komi, timeout=timeout,
+                moves,
+                to_move=to_move,
+                max_visits=max_visits,
+                size=size,
+                komi=komi,
+                timeout=timeout,
             )
         )
 
@@ -546,9 +640,21 @@ class EngineManager:
         *,
         size: int = 19,
         komi: float = settings.KOMI,
+        style: str = "human",
     ) -> tuple[int | None, Analysis]:
+        if (
+            style == "human"
+            and settings.normalize_difficulty(difficulty) != "max"
+            and installed("human-model")
+        ):
+            engine = await self.ensure_started()
+            if not engine.human_model:
+                # 文件刚下载完成、完成钩子尚未重启的窗口内也能正确加载。
+                await self.restart()
         return await self._retry_on_wedge(
-            lambda engine: engine.pick_move(moves, to_move, difficulty, size=size, komi=komi)
+            lambda engine: engine.pick_move(
+                moves, to_move, difficulty, size=size, komi=komi, style=style
+            )
         )
 
     async def shutdown(self) -> None:

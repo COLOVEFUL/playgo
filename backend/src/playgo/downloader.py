@@ -17,6 +17,12 @@ ProgressCb = Callable[[dict], None]
 
 def _items() -> dict[str, dict]:
     return {
+        "human-model": {
+            "url": settings.URL_HUMAN_MODEL,
+            "kind": "file",
+            "dest": settings.DOWNLOADED_DIR / settings.HUMAN_MODEL_NAME,
+            "size_mb": 95,
+        },
         "strong-model": {
             "url": settings.URL_STRONG_MODEL,
             "kind": "file",

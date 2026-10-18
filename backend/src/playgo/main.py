@@ -110,7 +110,12 @@ class AppState:
         try:
             moves = [(m.color, m.point) for m in g.moves]
             point, _ana = await self.engine.pick_move(
-                moves, g.to_play, g.cfg.difficulty, size=g.board.size, komi=g.cfg.komi
+                moves,
+                g.to_play,
+                g.cfg.difficulty,
+                size=g.board.size,
+                komi=g.cfg.komi,
+                style=g.cfg.ai_style,
             )
             if self.game is not g or not self._ai_needs_move():  # 期间被悔棋/新对局
                 return
@@ -198,7 +203,8 @@ state = AppState()
 
 class NewGameReq(BaseModel):
     mode: str = "pvp"  # pvp | ai
-    difficulty: str = "medium"
+    difficulty: str = settings.DEFAULT_DIFFICULTY
+    ai_style: str = "rank"
     human_color: int = BLACK
     time_preset: str = "standard"  # standard | blitz | long | free
     komi: float = settings.KOMI
@@ -249,13 +255,32 @@ async def get_state() -> dict:
 
 @app.post("/api/game/new")
 async def new_game(req: NewGameReq) -> dict:
+    difficulty = settings.normalize_difficulty(req.difficulty)
+    if req.mode == "ai":
+        if difficulty not in settings.DIFFICULTY_PRESETS:
+            raise HTTPException(400, err_detail("game.bad_difficulty"))
+        if req.ai_style not in {"rank", "human"}:
+            raise HTTPException(400, err_detail("game.bad_difficulty"))
+        if (
+            req.ai_style == "rank"
+            and difficulty != "max"
+            and difficulty not in settings.QUICK_RANKS
+        ):
+            raise HTTPException(400, err_detail("game.quick_rank_unavailable"))
+        if (
+            req.ai_style == "human"
+            and difficulty != "max"
+            and not state.engine.status()["human_sl"]["installed"]
+        ):
+            raise HTTPException(400, err_detail("engine.human_model_required"))
     if state._ai_task and not state._ai_task.done():
         state._ai_task.cancel()
     ts = settings.TimeSettings.presets().get(req.time_preset, settings.TimeSettings())
     ai_color = BLACK + WHITE - req.human_color if req.mode == "ai" else None
     cfg = GameConfig(
         mode=req.mode,
-        difficulty=req.difficulty if req.mode == "ai" else "medium",
+        difficulty=difficulty if req.mode == "ai" else settings.DEFAULT_DIFFICULTY,
+        ai_style=req.ai_style,
         human_color=req.human_color,
         komi=req.komi,
         time=ts,
@@ -637,8 +662,13 @@ async def engine_download(req: DownloadReq) -> dict:
     if state.downloads.busy:
         raise HTTPException(409, err_detail("download.busy"))
 
+    loop = asyncio.get_running_loop()
+
     def on_progress(ev: dict) -> None:
-        asyncio.ensure_future(state.broadcast({"type": "download", **ev}))
+        # 下载回调来自工作线程，只能回到主循环后创建广播任务。
+        loop.call_soon_threadsafe(
+            lambda: asyncio.create_task(state.broadcast({"type": "download", **ev}))
+        )
 
     try:
         state.downloads.start(req.ids, on_progress)
@@ -647,9 +677,12 @@ async def engine_download(req: DownloadReq) -> dict:
 
     # 下载完成后重启引擎拾取新文件；选择不变（显式选择保留，
     # 缺省选择按已装包推导——全新装机下完 GPU 包即自然切到 GPU）。
+    download_task = state.downloads.task
+    assert download_task is not None
+
     async def _after() -> None:
         with contextlib.suppress(Exception):
-            await state.downloads.task
+            await download_task
         with contextlib.suppress(Exception):
             await state.engine.restart()
         # 引擎重启会杀死在途查询，AI 回合可能无人再驱动——清缓存并补排一次

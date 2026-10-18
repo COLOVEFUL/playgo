@@ -3,15 +3,11 @@
 import { api, onWs } from "../api";
 import { errPayloadText, errText, t } from "../i18n";
 import type { MsgKey } from "../i18n";
+import { difficultyDetails, difficultyLabel } from "../difficulty";
 import type { EnginePackageInfo, EngineStatus, GameState, RecordItem } from "../types";
 import { closeDialog, engineStatus, setEngineStatus, showDialog, showScreen, toast } from "../main";
 
 // 选项表携带字面量键，渲染期再 t()（语言切换后可重渲染）
-const DIFFS: { id: string; labelKey: MsgKey; noteKey: MsgKey }[] = [
-  { id: "easy", labelKey: "diff.easy", noteKey: "diff.easy_note" },
-  { id: "medium", labelKey: "diff.medium", noteKey: "diff.medium_note" },
-  { id: "hard", labelKey: "diff.hard", noteKey: "diff.hard_note" },
-];
 const TIMES: { id: string; label: string; noteKey: MsgKey }[] = [
   { id: "standard", label: "30:00", noteKey: "time.standard_note" },
   { id: "blitz", label: "5:00", noteKey: "time.blitz_note" },
@@ -19,13 +15,7 @@ const TIMES: { id: string; label: string; noteKey: MsgKey }[] = [
   { id: "free", label: "", noteKey: "time.free_note" },
 ];
 
-const DIFF_KEY: Record<string, MsgKey> = {
-  easy: "diff.easy",
-  medium: "diff.medium",
-  hard: "diff.hard",
-};
-
-let sel = { mode: "ai", diff: "medium", color: 1, time: "standard" };
+let sel = { mode: "ai", diff: "10k", style: "rank", color: 1, time: "standard" };
 let panelMode: "engine" | "records" = "engine";
 
 // 引擎包卡片：包内下载项 → 标签键（渲染期 t()，语言切换可重建）
@@ -117,7 +107,7 @@ export async function refreshMenu(focus?: string): Promise<void> {
     const st = await api<{ game: GameState | null; engine?: EngineStatus }>("/api/state");
     const panel = document.getElementById("menu-panel")!;
     if (st.game && st.game.status !== "ended") {
-      const diff = t(DIFF_KEY[st.game.difficulty] ?? "diff.medium");
+      const diff = difficultyLabel(st.game.difficulty, st.game.ai_style);
       const color = t(st.game.human_color === 1 ? "common.black_stone" : "common.white_stone");
       slot.innerHTML = `
         <div class="mcard" id="card-resume" style="border-color:rgba(126,180,120,.45)">
@@ -163,7 +153,15 @@ export async function refreshMenu(focus?: string): Promise<void> {
           <button class="btn" id="btn-recheck" style="padding:7px 16px;font-size:12px">${t("menu.refresh")}</button>
         </div>
         <div class="pkg-cards">${pkgs.map((p) => renderPkgCard(p, downloading)).join("")}</div>
+        <div class="pkg-card human-card">
+          <div class="pkg-head"><b>${t("diff.human_title")}</b>
+          ${es?.human_sl.installed ? `<span class="chip">${t("diff.installed")}</span>`
+            : `<button class="btn primary" id="btn-human-download" ${downloading ? "disabled" : ""}>${t("pkg.download", { n: es?.human_sl.size_mb ?? 95 })}</button>`}</div>
+          <p class="pkg-desc">${t("diff.human_intro")}</p>
+          ${es?.human_sl.installed ? "" : `<div class="dl-row" data-id="human-model"><div class="label"><span>Human SL · b18c384nbt</span><span class="pct-label"></span></div><div class="progress"><i></i></div></div>`}
+        </div>
       </div>`;
+    panel.querySelector("#btn-human-download")?.addEventListener("click", () => void downloadHuman());
     panel.querySelectorAll<HTMLButtonElement>("[data-switch]").forEach((b) =>
       b.addEventListener("click", async () => {
         const id = b.dataset.switch!;
@@ -206,18 +204,50 @@ export async function refreshMenu(focus?: string): Promise<void> {
 }
 
 // ── 新对局 ──
-function showNewGame(mode: "ai" | "pvp"): void {
+async function downloadHuman(): Promise<void> {
+  try {
+    await api("/api/engines/download", { ids: ["human-model"] });
+    closeDialog();
+    showScreen("menu");
+    void refreshMenu("engine");
+    toast(t("dl.started"));
+  } catch (e) {
+    toast(errText(e), true);
+  }
+}
+
+async function showNewGame(mode: "ai" | "pvp"): Promise<void> {
   sel.mode = mode;
+  let es = engineStatus;
+  if (mode === "ai") {
+    try {
+      es = await api<EngineStatus>("/api/engines/status");
+      setEngineStatus(es);
+    } catch (e) {
+      toast(errText(e), true);
+      return;
+    }
+  }
   const d = showDialog(`
     <h2>${t(mode === "ai" ? "ng.ai_title" : "ng.pvp_title")}</h2>
     <div class="body">
       <div class="form-grid">
         ${mode === "ai" ? `
-        <div class="form-item"><label>${t("ng.difficulty")}</label>
-          <div class="seg" id="seg-diff">${DIFFS.map(
-            (x) =>
-              `<button data-v="${x.id}" class="${x.id === sel.diff ? "on" : ""}">${t(x.labelKey)}<span class="note">${t(x.noteKey)}</span></button>`,
-          ).join("")}</div>
+        <div class="form-item strength-field"><label for="in-difficulty">${t("ng.difficulty")}</label>
+          <div class="seg" id="seg-style">
+            <button data-v="rank" class="${sel.style === "rank" ? "on" : ""}">${t("diff.quick")}</button>
+            <button data-v="human" class="${sel.style === "human" ? "on" : ""}">${t("diff.human")}</button>
+          </div>
+          <select id="in-difficulty" class="strength-select">${es!.difficulties.map(
+            (x) => `<option value="${x.id}" ${x.id === sel.diff ? "selected" : ""}>${difficultyLabel(x.id, sel.style)}</option>`,
+          ).join("")}</select>
+          <p class="strength-note">${t("diff.rank_note")}</p>
+          <p class="strength-note" id="difficulty-details"></p>
+          <p class="strength-note" id="difficulty-high"></p>
+          <div id="human-required" class="strength-note" ${es!.human_sl.installed ? "hidden" : ""}>
+            ${t("diff.download_required")}
+            <button class="btn" id="dlg-human-download" ${es?.downloading ? "disabled" : ""}>${t("pkg.download", { n: es!.human_sl.size_mb })}</button>
+          </div>
         </div>
         <div class="form-item"><label>${t("ng.your_color")}</label>
           <div class="seg" id="seg-color">
@@ -256,7 +286,31 @@ function showNewGame(mode: "ai" | "pvp"): void {
       }),
     );
   };
-  bindSeg("seg-diff", (v) => (sel.diff = v));
+  if (mode === "ai") {
+    const updateDifficulty = () => {
+      d.querySelectorAll<HTMLOptionElement>("#in-difficulty option").forEach((option) => {
+        const available = sel.style === "human" || es!.difficulties.find((x) => x.id === option.value)!.quick;
+        option.disabled = !available;
+        option.textContent = difficultyLabel(option.value, available ? sel.style : "human") + (available ? "" : ` · ${t("diff.human_only")}`);
+      });
+      const unsupported = sel.style === "rank" && !es!.difficulties.find((x) => x.id === sel.diff)!.quick;
+      d.querySelector("#difficulty-details")!.textContent = unsupported ? t("diff.quick_range") : difficultyDetails(sel.diff, es, sel.style);
+      d.querySelector("#difficulty-high")!.textContent = /^[5-9]d$/.test(sel.diff) ? t("diff.high_dan_note") : "";
+      const missing = sel.style === "human" && sel.diff !== "max" && !es!.human_sl.installed;
+      (d.querySelector("#human-required") as HTMLElement).hidden = !missing;
+      (d.querySelector("#dlg-start") as HTMLButtonElement).disabled = missing || unsupported;
+    };
+    bindSeg("seg-style", (value) => {
+      sel.style = value;
+      updateDifficulty();
+    });
+    d.querySelector("#in-difficulty")!.addEventListener("change", (event) => {
+      sel.diff = (event.target as HTMLSelectElement).value;
+      updateDifficulty();
+    });
+    d.querySelector("#dlg-human-download")?.addEventListener("click", () => void downloadHuman());
+    updateDifficulty();
+  }
   bindSeg("seg-color", (v) => (sel.color = Number(v)));
   bindSeg("seg-time", (v) => (sel.time = v));
   let komi = 7.5;
@@ -270,6 +324,7 @@ function showNewGame(mode: "ai" | "pvp"): void {
       await api("/api/game/new", {
         mode,
         difficulty: sel.diff,
+        ai_style: sel.style,
         human_color: sel.color,
         time_preset: sel.time,
         komi,
