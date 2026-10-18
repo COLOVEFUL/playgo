@@ -121,6 +121,14 @@ def normalize_difficulty(value: str) -> str:
 # AI 推荐 / 形势判断所用计算量（始终用当前可用最强引擎）
 HINT_VISITS = 200
 HINT_VISITS_CPU = 80
+# 引擎配置的硬上限统一管理；推荐不修改模型，也不无限追加搜索。
+ENGINE_MAX_VISITS = 100_000
+HINT_DEEP_VISITS = 8_000
+HINT_DEEP_VISITS_CPU = 1_600
+HINT_QUICK_SECONDS = 2.0
+HINT_DEEP_SECONDS = 25.0
+HINT_TOTAL_SECONDS = 30.0  # 包含排队/启动等待；到时保留最新可用推荐
+HINT_REPORT_SECONDS = 0.25
 TERRITORY_VISITS = 120
 TERRITORY_VISITS_CPU = 60
 REVIEW_VISITS = 64  # 复盘批量分析每手的 visits（速度与质量折中）

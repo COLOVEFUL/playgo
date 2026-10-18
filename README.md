@@ -46,16 +46,29 @@ on your own machine, no account, no network required after setup.
   when it expires mid-turn (several can burn in one turn); loss when they run
   out (presets: 5:00 / 60:00 / free)
 - **Undo** — 1 move in PvP; in AI mode back to your previous turn (Ctrl+Z)
-- **AI hint** — top-3 candidate moves with win rates shown from *your* side's
-  view (playing White no longer shows Black's number), always computed by the
-  strongest available engine, toggleable
+- **Progressive AI hints** — top-3 candidates (or Pass), with win rates shown
+  from your side. A quick search retains the previous 200 GPU / 80 CPU visit
+  budget, reporting early results, then a deeper search updates the hints about
+  every 0.25 seconds. Deep budgets are **8,000 GPU / 1,600 CPU visits**, 10× the
+  Maximum opponent's budget on the same engine. Actual visits and search status
+  are visible. Each request has a **30-second total deadline**, including startup
+  and queueing; the quick/deep searches have 2/25-second engine time limits.
+  On timeout or interruption, keep the latest available hint. Slow hardware may
+  stop before surpassing Maximum; the UI says so. More search improves the basis
+  for a recommendation, but is not a guarantee that every move is better.
+  Moving, undoing, navigating away or turning hints off cancels the old search.
+  Queries respect the configured 100,000-visit engine ceiling, with room reserved
+  for search threads finishing; normal visit totals may slightly exceed a stage's
+  nominal budget. Hints use the active main model, without rank weakening.
 - **Territory estimation** — per-point ownership heatmap + win rate / score lead
 - **Auto-save** — finished games are written as SGF under `records/`
 - **AI review** — replay any saved game with a clickable win-rate curve,
   per-move grading (brilliant → blunder), engine suggestions, and territory replay
 - **Review hints** — at any replay position, request live top-3 candidate moves
   with win rates and compare what you played against the engine's pick — no
-  full-game analysis needed first
+  full-game analysis needed first. Uses the same bounded progressive search;
+  completed results are cached for up to 64 positions, isolated by engine,
+  record version, board size and komi
 - **Takeover** — take over any reviewed position and play it out yourself,
   handling both Black and White to verify your reading; free clock, original
   board size and komi, hints/territory still available; takeover games are not saved.

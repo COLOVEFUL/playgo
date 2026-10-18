@@ -82,6 +82,7 @@ class KataGoEngine:
         self.human_model = human_path if human_path.exists() else None
         self.proc: asyncio.subprocess.Process | None = None
         self._pending: dict[str, asyncio.Future[dict]] = {}
+        self._progress: dict[str, Callable[[dict], None]] = {}
         self._reader: asyncio.Task | None = None
         self._watcher: asyncio.Task | None = None
         self._lock = asyncio.Lock()
@@ -124,7 +125,7 @@ class KataGoEngine:
                     "allowResignation=false",
                     f"numAnalysisThreads={1 if self.is_gpu else 2}",
                     f"numSearchThreadsPerAnalysisThread={self.num_threads}",
-                    "maxVisits=100000",
+                    f"maxVisits={settings.ENGINE_MAX_VISITS}",
                 ]
             )
             cmd = [
@@ -221,7 +222,10 @@ class KataGoEngine:
         if not fut or fut.done():
             return
         if data.get("isDuringSearch"):
-            return  # 只要最终结果
+            callback = self._progress.get(data.get("id"))
+            if callback:
+                callback(data)
+            return
         if "warning" in data and "rootInfo" not in data:
             log.warning("引擎告警: %s", data)
             return  # 告警行可能带查询 id，不能当结果
@@ -244,6 +248,9 @@ class KataGoEngine:
 
     async def stop(self) -> None:
         self.ready = False
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(EngineError("引擎进程已退出", code="engine.exited"))
         for t in (self._reader, self._watcher):
             if t:
                 t.cancel()
@@ -268,6 +275,8 @@ class KataGoEngine:
         timeout: float = 0.0,
         human_profile: str | None = None,
         include_policy: bool = False,
+        max_time: float | None = None,
+        on_update: Callable[[Analysis], None] | None = None,
     ) -> Analysis:
         """分析当前局面。moves 为已落子的历史（不含即将走的一手）。
 
@@ -280,7 +289,7 @@ class KataGoEngine:
         if timeout <= 0:
             timeout = self.auto_timeout(max_visits)
         rid = uuid.uuid4().hex[:12]
-        payload = {
+        payload: dict = {
             "id": rid,
             # 停一手必须以 "pass" 传给引擎：丢掉会破坏黑白轮转，分析出错误局面
             "moves": [
@@ -288,7 +297,8 @@ class KataGoEngine:
                 for c, p in moves
             ],
             "analyzeTurns": [len(moves)],
-            "maxVisits": max_visits,
+            # 多搜索线程收尾可能多走 num_threads-1 visits，硬上限预留收尾空间。
+            "maxVisits": min(max(1, max_visits), settings.ENGINE_MAX_VISITS - self.num_threads),
             "includeOwnership": True,
             "boardXSize": size,
             "boardYSize": size,
@@ -303,6 +313,11 @@ class KataGoEngine:
                 "humanSLProfile": human_profile,
                 "ignorePreRootHistory": False,
             }
+        if max_time is not None:
+            payload.setdefault("overrideSettings", {})["maxTime"] = max_time
+        if on_update:
+            payload["reportDuringSearchEvery"] = settings.HINT_REPORT_SECONDS
+            self._progress[rid] = lambda data: on_update(self._normalize(data, to_move, size))
         fut: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
         self._pending[rid] = fut
         try:
@@ -319,9 +334,22 @@ class KataGoEngine:
                 msg, code="engine.analyze_timeout", params={"timeout": timeout}
             ) from None
         finally:
+            # 超时/HTTP 断开也必须终止引擎工作，不能只丢弃 Python future。
+            if not fut.done() or fut.cancelled():
+                self._terminate(rid)
             self._pending.pop(rid, None)
+            self._progress.pop(rid, None)
 
+        if "error" in data or data.get("noResults"):
+            msg = "引擎无可用分析结果"
+            raise EngineError(msg, code="engine.not_ready")
         return self._normalize(data, to_move, size)
+
+    def _terminate(self, rid: str) -> None:
+        if self.proc and self.proc.returncode is None and self.proc.stdin:
+            payload = {"id": uuid.uuid4().hex, "action": "terminate", "terminateId": rid}
+            with contextlib.suppress(OSError, RuntimeError):
+                self.proc.stdin.write((json.dumps(payload) + "\n").encode())
 
     def _normalize(self, data: dict, to_move: int, size: int) -> Analysis:
         """归一化引擎输出。启动已钉死 reportAnalysisWinratesAs=BLACK，
@@ -573,10 +601,15 @@ class EngineManager:
             raise EngineError(msg, code="engine.all_failed", params={"detail": str(last_err)})
 
         self._starting = asyncio.create_task(_start())
-        try:
-            return await self._starting
-        finally:
+        self._starting.add_done_callback(self._start_finished)
+        # 请求限时结束/浏览器断开不可取消半启动进程；保留任务直至真正完成。
+        return await asyncio.shield(self._starting)
+
+    def _start_finished(self, task: asyncio.Task) -> None:
+        if self._starting is task:
             self._starting = None
+        if not task.cancelled():
+            task.exception()  # 所有等待者已离开时也收取启动异常，避免未检索警告
 
     async def restart(self) -> KataGoEngine:
         """重建引擎（下载补齐文件/实例疑似卡死时）。select/_after/自愈重试共用，串行执行。"""

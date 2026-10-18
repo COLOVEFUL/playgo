@@ -39,8 +39,11 @@ npx tsc --noEmit   # 仅类型检查
 - **AI 行棋竞态防护**：`schedule_ai()` 的回复在落子前重新校验当前该谁走，悔棋/新对局期间到达的回复直接丢弃。
 - **缓存键 = 完整着法序列**（非手数）：`_hint_cache`/`_terr_cache`，悔棋重下同手数也会失效。例外：`_review_hint_cache` 键为 `(file, 手数)`——棋谱不可变，复盘推荐结果永久有效，无需失效。
 - **前端**：`main.ts` 路由 → `screens/menu|play|review`；`board.ts` Canvas 渲染器（动画、悬停、推荐环——play 与 review 模式均画、归属热力、死子标记）；`api.ts` REST 封装 + WS 事件总线（自动重连）；`types.ts` 与后端 DTO 一一对应，改协议需两侧同步。
+- **渐进推荐**：`hints.py` 的 `HintService` 服务 `GET /api/game/hint/stream` 与 `/api/review/hint/stream?file&moves`，响应为 `application/x-ndjson`（每行一份完整推荐，非WS）；旧 `/hint` JSON端点保留快速单次兼容行为。快搜预算GPU200/CPU80、`maxTime=2`秒，随后深搜GPU8000/CPU1600、`maxTime=25`秒（同引擎最强档10倍预算），通过KataGo `reportDuringSearchEvery=0.25`推送中间结果；深搜重新建树，搜索量未追上已显示结果时不得覆盖。总超时30秒含启动/排队，不调用自愈重试，避免将限时搜索扩成长时间重启等待；超时/错误保留最后结果，无结果则流内`{error:{code,args}}`。新增字段`visits/budget_visits/ai_visits/thinking/stop_reason:visits|time|error|null/recommend_pass`；DTO仍黑方视角，展示层按行棋方换算，pass首选不能误显示次选落点。显示超过最强档预算只依据实际visits，不承诺逐手一定更优。
 
 ## 关键约定（易错点）
+
+- **推荐取消/预算/缓存**：前端`api.streamHint`使用AbortController、32秒网络兜底，对局请求按完整局面键去重，复盘按请求序号隔离；关闭/落子/悔棋/导航/离屏取消旧HTTP流，后端取消查询时发KataGo `terminate`（绝不能只移除future）。对局流另每0.25秒校验会话和完整前缀，切换引擎即停止旧流。`HintService`仅缓存正常结束的结果（含正常时间耗尽），LRU上限64；键含引擎实例、对局UUID或棋谱mtime、完整着法、行棋方、尺寸、贴目；超时兜底/错误/断开不入缓存，与旧JSON推荐缓存独立。`settings.ENGINE_MAX_VISITS=100000`统一启动配置和查询上限，查询钳制时扣除`num_threads`以预留并行收尾，普通阶段实际visits可略高于标称预算；这里是应用配置的引擎上限，不是神经网络固有的模型参数。限时等待不能cancel半启动进程：`EngineManager.ensure_started`对创建者也shield启动任务，仅在任务真正结束时清除`_starting`。回归见`tests/test_hints.py`。实现参考本机Just Go日志中的连续`kata-analyze`调用，协议遵循[KataGo Analysis Engine](https://github.com/lightvector/KataGo/blob/v1.18.1/docs/Analysis_Engine.md)，未复制Just Go程序代码。
 
 - **对局弹层的路由约束**：`applyState()` 仍可在后台更新对局数据，但点目/终局弹层仅在 `screen-play.active` 时显示；否则接管结束后返回复盘、或在复盘切换语言时，会被后台对局弹层遮住。
 

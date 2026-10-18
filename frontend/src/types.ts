@@ -76,6 +76,12 @@ export interface HintMove {
 }
 
 export interface HintData {
+  visits: number;
+  budget_visits: number;
+  ai_visits: number;
+  thinking: boolean;
+  stop_reason: "visits" | "time" | "error" | null;
+  recommend_pass: boolean;
   to_play: number; // 推荐局面的行棋方 = 请求推荐的玩家，胜率展示视角
   move_count: number;
   winrate_black: number;

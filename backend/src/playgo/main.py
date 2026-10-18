@@ -13,7 +13,7 @@ import time
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -28,6 +28,7 @@ from playgo.game import (
     GameConfig,
     GameSession,
 )
+from playgo.hints import HintService
 from playgo.katago import Analysis, EngineError, EngineManager
 from playgo.rules import BLACK, EMPTY, WHITE, IllegalMove, opponent
 from playgo.sgf import SgfGame, list_records, parse_sgf, save_record
@@ -45,6 +46,7 @@ class AppState:
     def __init__(self) -> None:
         self.game: GameSession | None = None
         self.engine = EngineManager()
+        self.hints = HintService()
         self.downloads = DownloadManager()
         self.clients: set[WebSocket] = set()
         self.ticker: asyncio.Task | None = None
@@ -415,6 +417,29 @@ async def finalize_game() -> None:
     log.info("棋谱已保存: %s", path)
 
 
+@app.get("/api/game/hint/stream")
+async def hint_stream() -> StreamingResponse:
+    g = _game()
+    moves = [(m.color, m.point) for m in g.moves]
+    return StreamingResponse(
+        state.hints.stream(
+            state.engine,
+            moves,
+            to_move=g.to_play,
+            size=g.board.size,
+            komi=g.cfg.komi,
+            source=(g.id,),
+            is_current=lambda: (
+                state.game is g
+                and g.status == STATUS_PLAYING
+                and moves == [(m.color, m.point) for m in g.moves]
+            ),
+        ),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/game/hint")
 async def hint() -> dict:
     g = _game()
@@ -499,6 +524,26 @@ async def record_detail(file_path: str) -> dict:
         "moves": [{"color": c, "point": p} for c, p in g.moves],
         "analysis": analysis,
     }
+
+
+@app.get("/api/review/hint/stream")
+async def review_hint_stream(file: str, moves: int) -> StreamingResponse:
+    sgf, path = _load_record(file)
+    n = max(0, min(moves, len(sgf.moves)))
+    hist = list(sgf.moves[:n])
+    return StreamingResponse(
+        state.hints.stream(
+            state.engine,
+            hist,
+            to_move=opponent(hist[-1][0]) if hist else BLACK,
+            size=sgf.size,
+            komi=sgf.komi,
+            source=(file, path.stat().st_mtime_ns),
+            is_current=lambda: True,
+        ),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/review/hint")

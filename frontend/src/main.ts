@@ -6,7 +6,7 @@ import { initLang, lang, onLangChange, setLang, t } from "./i18n";
 import type { EngineStatus, WsEvent } from "./types";
 import { initMenu, refreshMenu } from "./screens/menu";
 import { initPlay, activatePlay, deactivatePlay, onGameEvent, reapplyPlay } from "./screens/play";
-import { initReview, activateReview, reapplyReview } from "./screens/review";
+import { initReview, activateReview, deactivateReview, reapplyReview } from "./screens/review";
 
 // 语言须在首次渲染前就位（跟随浏览器 / localStorage）
 initLang();
@@ -63,6 +63,7 @@ export function showScreen(name: "menu" | "play" | "review"): void {
   if (name === "play") activatePlay();
   else deactivatePlay();
   if (name === "review") activateReview();
+  else deactivateReview();
 }
 
 export function fmtClock(sec: number, inByo: boolean): string {

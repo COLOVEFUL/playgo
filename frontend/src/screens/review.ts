@@ -1,6 +1,6 @@
 /** 复盘页：棋谱回放 + 胜率曲线 + AI 逐手分析 + 形势回看 + AI 推荐/接管试下。 */
 
-import { api, onWs } from "../api";
+import { api, hintProgress, onWs, streamHint } from "../api";
 import { GoBoard } from "../board";
 import { errPayloadText, errText, t } from "../i18n";
 import type { MsgKey } from "../i18n";
@@ -18,6 +18,7 @@ let terrToggle = false;
 let hintToggle = false;
 let hintData: HintData | null = null; // 当前局面（= curIdx）的复盘推荐
 let hintRequest = 0;
+let hintAbort: AbortController | null = null;
 let loadRequest = 0;
 let loading = false;
 let takeoverPending = false;
@@ -91,6 +92,7 @@ export function initReview(): void {
     hintBtn.classList.toggle("on", hintToggle);
     if (hintToggle) void fetchHint();
     else {
+      hintAbort?.abort();
       hintData = null;
       hintStatus = null;
       board.setHints(null);
@@ -155,6 +157,14 @@ export async function activateReview(): Promise<void> {
     const list = await api<{ file: string }[]>("/api/records").catch(() => []);
     if (list.length && !detail && !loading && request === loadRequest) await load(list[0].file);
   }
+  if (hintToggle) void fetchHint();
+}
+
+export function deactivateReview(): void {
+  hintAbort?.abort();
+  hintAbort = null;
+  hintRequest++;
+  if (hintData?.thinking) hintData = null;
 }
 
 /** 语言切换后恢复复盘页显示（名称/meta/游标/曲线）。 */
@@ -228,37 +238,46 @@ function goto(n: number): void {
 
 // ── 复盘 AI 推荐：对照"我下的"与"AI 正着"（独立于整谱深度复盘） ──
 async function fetchHint(): Promise<void> {
-  if (!detail || loading || !hintToggle) return;
+  if (!detail || loading || !hintToggle
+    || !document.getElementById("screen-review")?.classList.contains("active")) return;
+  hintAbort?.abort();
+  const controller = new AbortController();
+  hintAbort = controller;
   const file = detail.file;
   const moves = curIdx;
   const request = ++hintRequest;
-  const isCurrent = () => request === hintRequest && hintToggle && !loading
+  const isCurrent = () => !controller.signal.aborted && request === hintRequest && hintToggle && !loading
     && detail?.file === file && curIdx === moves;
   hintStatus = "loading";
   render();
   try {
-    const h = await api<HintData>(
-      `/api/review/hint?file=${encodeURIComponent(file)}&moves=${moves}`,
-    );
-    // 响应到达时已导航离开该局面 → 丢弃
-    if (!isCurrent() || h.move_count !== moves) return;
-    hintStatus = null;
-    hintData = h;
-    board.setHints(h.moves);
-    render();
+    await streamHint(`/api/review/hint/stream?file=${encodeURIComponent(file)}&moves=${moves}`,
+      controller.signal, (h) => {
+      // 响应到达时已导航离开该局面 → 丢弃
+      if (!isCurrent() || h.move_count !== moves) return;
+      hintStatus = null;
+      hintData = h;
+      board.setHints(h.recommend_pass ? null : h.moves);
+      render();
+    });
   } catch (e) {
     if (!isCurrent()) return;
     hintStatus = "error";
     toast(errText(e), true);
     render();
+  } finally {
+    if (hintAbort === controller) hintAbort = null;
   }
 }
 
 /** 导航后同步推荐覆盖层：命中缓存直接上，否则清掉并按需拉取。 */
 function syncHints(): void {
+  hintAbort?.abort();
+  hintAbort = null;
   if (!hintToggle) return;
-  if (hintData && hintData.move_count === curIdx) board.setHints(hintData.moves);
-  else {
+  if (hintData && !hintData.thinking && hintData.move_count === curIdx) {
+    board.setHints(hintData.recommend_pass ? null : hintData.moves);
+  } else {
     hintData = null;
     board.setHints(null);
     void fetchHint();
@@ -346,13 +365,15 @@ function render(): void {
     }
   }
   // 复盘推荐（开启且数据对应当前局面时）：首选点 + 行棋方视角胜率
-  if (hintToggle && hintData && hintData.move_count === curIdx && hintData.moves.length) {
+  if (hintToggle && hintData && hintData.move_count === curIdx
+    && (hintData.moves.length || hintData.recommend_pass)) {
     const m = hintData.moves[0];
-    const wr = hintData.to_play === BLACK ? m.winrate_black : 1 - m.winrate_black;
+    const blackWr = hintData.recommend_pass ? hintData.winrate_black : m.winrate_black;
+    const wr = hintData.to_play === BLACK ? blackWr : 1 - blackWr;
     info.innerHTML += `<br>${t("rv.hint_line", {
-      coord: coordName(m.point, N),
+      coord: hintData.recommend_pass ? t("rv.pass_move") : coordName(m.point, N),
       p: (wr * 100).toFixed(1),
-    })}`;
+    })}<br><small>${hintProgress(hintData)}</small>`;
   } else if (hintToggle) {
     const key = hintStatus === "error" ? "rv.hint_failed"
       : hintStatus === "loading" ? "rv.hint_loading" : "rv.hint_empty";

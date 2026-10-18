@@ -1,11 +1,11 @@
 /** 对局页：棋盘 + 计时 + 操作 + AI推荐/形势判断 + 点目/结果流程。 */
 
-import { api } from "../api";
+import { api, hintProgress, streamHint } from "../api";
 import { GoBoard } from "../board";
 import { sfx } from "../audio";
 import { errPayloadText, errText, t } from "../i18n";
 import { difficultyDetails, difficultyLabel, difficultySummary } from "../difficulty";
-import type { GameState, HintData, TerritoryData, WsEvent } from "../types";
+import type { GameState, TerritoryData, WsEvent } from "../types";
 import { closeDialog, coordName, engineStatus, fmtClock, showDialog, showScreen, toast } from "../main";
 
 const BLACK = 1;
@@ -13,6 +13,8 @@ const BLACK = 1;
 let board: GoBoard;
 let state: GameState | null = null;
 let hintOn = false;
+let hintAbort: AbortController | null = null;
+let hintKey = "";
 let terrOn = false;
 let hintMoveCount = -1;
 let terrMoveCount = -1;
@@ -130,7 +132,7 @@ export function initPlay(): void {
     hintOn = !hintOn;
     btnHint.classList.toggle("on", hintOn);
     if (hintOn) void fetchHint();
-    else board.setHints(null);
+    else clearHints();
   });
   btnTerr.addEventListener("click", () => {
     terrOn = !terrOn;
@@ -153,7 +155,10 @@ export function activatePlay(): void {
   if (state) applyState(state, true);
 }
 export function deactivatePlay(): void {
-  /* 暂无需要 */
+  hintAbort?.abort();
+  hintAbort = null;
+  hintKey = "";
+  hintMoveCount = -1;
 }
 
 /** 语言切换后按当前状态与语言重渲染（棋盘/曲线/覆盖层全部恢复）。 */
@@ -225,9 +230,12 @@ function isHumanTurn(): boolean {
 }
 
 function clearHints(): void {
+  hintAbort?.abort();
+  hintAbort = null;
+  hintKey = "";
   hintMoveCount = -1;
   board.setHints(null);
-  els.hintText.innerHTML = t("play.hint_wait");
+  els.hintText.innerHTML = t(hintOn ? "play.hint_wait" : "play.hint_off");
   const pct = els.hintText.parentElement!.querySelector(".pct");
   if (pct) pct.textContent = "—";
 }
@@ -245,29 +253,41 @@ function returnToReview(): void {
 }
 
 async function fetchHint(): Promise<void> {
-  if (!state || state.status !== "playing" || !isHumanTurn()) return;
+  if (!state || !hintOn || !isHumanTurn()
+    || !document.getElementById("screen-play")?.classList.contains("active")) return;
   const key = positionKey();
+  if (hintAbort && hintKey === key) return;
+  hintAbort?.abort();
+  const controller = new AbortController();
+  hintAbort = controller;
+  hintKey = key;
   try {
-    const h = await api<HintData>("/api/game/hint");
-    // 响应到达时局面或轮次已变 → 丢弃
-    if (!hintOn || !state || state.status !== "playing" || key !== positionKey()
-      || h.move_count !== state.moves.length || !isHumanTurn()) return;
-    hintMoveCount = h.move_count;
-    board.setHints(h.moves);
-    if (h.moves.length) {
-      const m = h.moves[0];
-      const coord = coordName(m.point, state.size);
-      // 胜率按玩家棋色显示：推荐只在轮到该玩家时出现，视角即推荐局面的行棋方
-      const myWr = h.to_play === BLACK ? m.winrate_black : 1 - m.winrate_black;
-      els.hintText.innerHTML = t("play.hint_item", {
-        coord,
-        p: (myWr * 100).toFixed(1),
-      });
-      els.hintText.parentElement!.querySelector(".pct")!.textContent = coord;
-    }
-    updateWinrate(h.winrate_black, h.score_lead_black);
+    await streamHint("/api/game/hint/stream", controller.signal, (h) => {
+      // 响应到达时局面或轮次已变 → 丢弃
+      if (controller.signal.aborted || !hintOn || !state || state.status !== "playing" || key !== positionKey()
+        || h.move_count !== state.moves.length || !isHumanTurn()) return;
+      hintMoveCount = h.move_count;
+      board.setHints(h.recommend_pass ? null : h.moves);
+      if (h.moves.length || h.recommend_pass) {
+        const m = h.moves[0];
+        const coord = h.recommend_pass ? t("rv.pass_move") : coordName(m.point, state.size);
+        // 胜率按玩家棋色显示：推荐只在轮到该玩家时出现，视角即推荐局面的行棋方
+        const wr = h.recommend_pass ? h.winrate_black : m.winrate_black;
+        const myWr = h.to_play === BLACK ? wr : 1 - wr;
+        els.hintText.innerHTML = t("play.hint_item", {
+          coord,
+          p: (myWr * 100).toFixed(1),
+          progress: hintProgress(h),
+        });
+        els.hintText.parentElement!.querySelector(".pct")!.textContent = coord;
+      }
+      updateWinrate(h.winrate_black, h.score_lead_black);
+    });
   } catch (e) {
-    if (hintOn && key === positionKey() && state?.status === "playing") toast(errText(e), true);
+    if (!controller.signal.aborted && hintOn && key === positionKey()
+      && state?.status === "playing") toast(errText(e), true);
+  } finally {
+    if (hintAbort === controller) hintAbort = null;
   }
 }
 
@@ -455,7 +475,8 @@ function applyState(s: GameState, force = false): void {
   if (s.status === "playing") {
     const humanTurn = isHumanTurn();
     if (hintOn) {
-      if (!humanTurn || hintMoveCount !== s.moves.length) {
+      if (!humanTurn || (hintKey && hintKey !== positionKey())
+        || (!hintAbort && hintMoveCount !== s.moves.length)) {
         clearHints(); // AI 回合或局面已变：先清掉旧推荐
       }
       if (humanTurn && hintOn && hintMoveCount !== s.moves.length) void fetchHint();
@@ -467,7 +488,7 @@ function applyState(s: GameState, force = false): void {
     }
   } else {
     // 点目/终局阶段撤下推荐
-    if (hintMoveCount !== -1) clearHints();
+    if (hintAbort || hintMoveCount !== -1) clearHints();
   }
 
   // 点目 / 结果流程
