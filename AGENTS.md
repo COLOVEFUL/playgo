@@ -42,6 +42,10 @@ npx tsc --noEmit   # 仅类型检查
 
 ## 关键约定（易错点）
 
+- **对局弹层的路由约束**：`applyState()` 仍可在后台更新对局数据，但点目/终局弹层仅在 `screen-play.active` 时显示；否则接管结束后返回复盘、或在复盘切换语言时，会被后台对局弹层遮住。
+
+- **复盘往返与异步隔离**：接管快照新增 `review_source: {file, moves} | null`（配置中存 `(file, moves)`），对局页与终局弹层的「返回原复盘」恢复该棋谱的接管手数；`open-review` 事件兼容文件名字符串与 `{file, moves}`。对局 ID 使用 UUID，避免同秒重复接管被当成同一盘。复盘加载用请求序号隔离，推荐同时校验请求序号、文件和手数；对局推荐/形势按对局 ID + 完整着法序列校验，后端响应手数/轮次在等待前捕获，旧查询完成不得写入新对局缓存。接管前先验证棋谱前缀，成功后再取消原 AI；AI/点目异步回复还需校验会话身份。复盘 `reapplyReview()` 必须先恢复棋盘尺寸再重放局面（包括语言切换）。回归测试见 `backend/tests/test_review.py`。
+
 - **子进程行上限陷阱**：KataGo 单行 JSON 响应可达 135KB+（visits 越大越长），`create_subprocess_exec` 必须传 `limit=2**22`——asyncio `StreamReader` 默认 64KB 行上限会让 `readline()` 抛错**静默杀死读取任务**，表象是随机"分析超时"且引擎永久失聪（简单/中等档响应小不触发，困难档必中）。查询超时按 visits/后端用 `auto_timeout` 估算，勿回退固定 60s。
 - **Windows 下 uvicorn 禁用 `--reload`/`--workers`**：uvicorn 的 `Config.use_subprocess = reload or workers>1`，一旦成立，Windows 强制 `SelectorEventLoop`——asyncio 子进程直接 `NotImplementedError`，KataGo 永远起不来（表象：预热即抛 Task exception was never retrieved）。开发/调试一律单进程无 reload（`dev.bat` 同理），改后端代码就重启。
 - **坐标三套体系**：内部 `point = y*19+x`（左上原点、y 向下）；KataGo `Q16`（字母跳 I、从底部数行）；SGF `pd`（a–s 不跳）。转换只在 `katago.py` / `sgf.py` 进出。`ownership` 向量下标即内部坐标（行优先、y 从上）。

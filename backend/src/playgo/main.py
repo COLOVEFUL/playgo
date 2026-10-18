@@ -112,7 +112,7 @@ class AppState:
             point, _ana = await self.engine.pick_move(
                 moves, g.to_play, g.cfg.difficulty, size=g.board.size, komi=g.cfg.komi
             )
-            if not self._ai_needs_move():  # 期间被悔棋/新对局
+            if self.game is not g or not self._ai_needs_move():  # 期间被悔棋/新对局
                 return
             if point is None:
                 g.pass_move(g.to_play)
@@ -137,8 +137,10 @@ class AppState:
             return
         try:
             await self.engine.ensure_started()
+            if self.game is not g or g.status != STATUS_SCORING:
+                return
             ana = await self.analyze_current(visits=None, territory=True)
-            if g.status != STATUS_SCORING:
+            if self.game is not g or g.status != STATUS_SCORING:
                 return  # 判定期间玩家已"继续对弈"，不拉回点目
             assert ana is not None
             dead: set[int] = set()
@@ -162,21 +164,25 @@ class AppState:
         g = self.game
         if not g:
             return None
+        sig = tuple((m.color, m.point) for m in g.moves)
+        to_move = g.to_play
         engine = await self.engine.ensure_started()
         gpu = engine.is_gpu
-        sig = tuple((m.color, m.point) for m in g.moves)
         if territory:
             v = visits or (settings.TERRITORY_VISITS if gpu else settings.TERRITORY_VISITS_CPU)
             cache = self._terr_cache
         else:
             v = visits or (settings.HINT_VISITS if gpu else settings.HINT_VISITS_CPU)
             cache = self._hint_cache
-        if cache and cache[0] == sig:
+        if self.game is g and cache and cache[0] == sig:
             return cache[1]
         moves = list(sig)
         ana = await self.engine.analyze(
-            moves, to_move=g.to_play, max_visits=v, size=g.board.size, komi=g.cfg.komi
+            moves, to_move=to_move, max_visits=v, size=g.board.size, komi=g.cfg.komi
         )
+        # 接管/悔棋期间完成的旧查询不能污染新对局（尺寸、贴目可能不同）。
+        if self.game is not g or sig != tuple((m.color, m.point) for m in g.moves):
+            return ana
         if territory:
             self._terr_cache = (sig, ana)
         else:
@@ -387,6 +393,7 @@ async def finalize_game() -> None:
 @app.get("/api/game/hint")
 async def hint() -> dict:
     g = _game()
+    to_play, move_count = g.to_play, len(g.moves)
     try:
         ana = await state.analyze_current(territory=False)
     except EngineError as e:
@@ -394,8 +401,8 @@ async def hint() -> dict:
     assert ana is not None
     top = ana.best_moves[:3]
     return {
-        "to_play": g.to_play,
-        "move_count": len(g.moves),
+        "to_play": to_play,
+        "move_count": move_count,
         "winrate_black": ana.winrate_black,
         "score_lead_black": ana.score_lead_black,
         "moves": [
@@ -413,13 +420,14 @@ async def hint() -> dict:
 @app.get("/api/game/territory")
 async def territory() -> dict:
     g = _game()
+    move_count = len(g.moves)
     try:
         ana = await state.analyze_current(territory=True)
     except EngineError as e:
         raise HTTPException(503, err_detail(e.code, e.params)) from e
     assert ana is not None
     return {
-        "move_count": len(g.moves),
+        "move_count": move_count,
         "winrate_black": ana.winrate_black,
         "score_lead_black": ana.score_lead_black,
         "ownership": ana.ownership,
@@ -518,8 +526,6 @@ async def review_takeover(req: TakeoverReq) -> dict:
     """
     sgf, _f = _load_record(req.file)
     n = max(0, min(req.moves, len(sgf.moves)))
-    if state._ai_task and not state._ai_task.done():
-        state._ai_task.cancel()
     cfg = GameConfig(
         mode=MODE_PVP,
         komi=sgf.komi,
@@ -528,12 +534,15 @@ async def review_takeover(req: TakeoverReq) -> dict:
         black_name=sgf.black_name,
         white_name=sgf.white_name,
         takeover=True,
+        review_source=(req.file, n),
     )
     g = GameSession(cfg)
     try:
         g.seed_moves(list(sgf.moves[:n]))
     except IllegalMove as e:  # 外部棋谱可能含非法着法
         raise HTTPException(400, err_detail(e.code, e.params)) from e
+    if state._ai_task and not state._ai_task.done():
+        state._ai_task.cancel()
     state.game = g
     state._hint_cache = None
     state._terr_cache = None

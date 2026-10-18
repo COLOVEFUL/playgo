@@ -71,6 +71,7 @@ export function initPlay(): void {
     <button class="btn toggle" id="btn-hint">${t("play.hint_toggle")}</button>
     <button class="btn toggle" id="btn-terr">${t("play.terr_toggle")}</button>
     <div class="divider"></div>
+    <button class="btn" id="btn-review" style="display:none">${t("rv.return")}</button>
     <button class="btn" id="btn-menu">${t("play.menu")}</button>
   </footer>`;
 
@@ -123,6 +124,7 @@ export function initPlay(): void {
   $("btn-pass").addEventListener("click", doPass);
   $("btn-score").addEventListener("click", doScore);
   $("btn-resign").addEventListener("click", doResign);
+  $("btn-review").addEventListener("click", returnToReview);
   $("btn-menu").addEventListener("click", () => showScreen("menu"));
   const btnHint = $("btn-hint");
   const btnTerr = $("btn-terr");
@@ -234,12 +236,26 @@ function clearHints(): void {
   if (pct) pct.textContent = "—";
 }
 
+/** 手数相同也可能已悔棋重下或重新接管，按整条着法序列识别请求局面。 */
+function positionKey(s = state): string {
+  return s ? `${s.id}:${s.to_play}:${s.moves.map((m) => `${m.color},${m.point}`).join(";")}` : "";
+}
+
+function returnToReview(): void {
+  if (!state?.review_source) return;
+  closeDialog();
+  window.dispatchEvent(new CustomEvent("open-review", { detail: state.review_source }));
+  showScreen("review");
+}
+
 async function fetchHint(): Promise<void> {
   if (!state || state.status !== "playing" || !isHumanTurn()) return;
+  const key = positionKey();
   try {
     const h = await api<HintData>("/api/game/hint");
     // 响应到达时局面或轮次已变 → 丢弃
-    if (!hintOn || !state || h.move_count !== state.moves.length || !isHumanTurn()) return;
+    if (!hintOn || !state || state.status !== "playing" || key !== positionKey()
+      || h.move_count !== state.moves.length || !isHumanTurn()) return;
     hintMoveCount = h.move_count;
     board.setHints(h.moves);
     if (h.moves.length) {
@@ -255,20 +271,22 @@ async function fetchHint(): Promise<void> {
     }
     updateWinrate(h.winrate_black, h.score_lead_black);
   } catch (e) {
-    toast(errText(e), true);
+    if (hintOn && key === positionKey() && state?.status === "playing") toast(errText(e), true);
   }
 }
 
 async function fetchTerritory(): Promise<void> {
   if (!state || state.status !== "playing") return;
+  const key = positionKey();
   try {
     const t0 = await api<TerritoryData>("/api/game/territory");
-    if (!terrOn || t0.move_count !== state.moves.length) return;
+    if (!terrOn || state.status !== "playing" || key !== positionKey()
+      || t0.move_count !== state.moves.length) return;
     terrMoveCount = t0.move_count;
     board.setTerritory(t0.ownership);
     updateWinrate(t0.winrate_black, t0.score_lead_black);
   } catch (e) {
-    toast(errText(e), true);
+    if (terrOn && key === positionKey() && state?.status === "playing") toast(errText(e), true);
   }
 }
 
@@ -334,6 +352,12 @@ let gameId: string | null = null;
 function applyState(s: GameState, force = false): void {
   const prev = state;
   state = s;
+  if (positionKey(prev) !== positionKey(s)) {
+    hintMoveCount = -1;
+    terrMoveCount = -1;
+    board.setHints(null);
+    board.setTerritory(null);
+  }
 
   // 换了新对局：清空全部派生数据（胜率历史/覆盖层）
   if (s.id !== gameId) {
@@ -351,6 +375,7 @@ function applyState(s: GameState, force = false): void {
   // 落子动画：对比新手
   if (
     prev &&
+    prev.id === s.id &&
     s.moves.length > prev.moves.length &&
     s.moves.length - prev.moves.length === 1 &&
     !force
@@ -390,11 +415,12 @@ function applyState(s: GameState, force = false): void {
       : s.takeover
         ? t("play.chip_takeover")
         : t("play.chip_pvp");
+  document.getElementById("btn-review")!.style.display = s.review_source ? "" : "none";
 
   // 手数列表
   const list = els.movelist;
   list.innerHTML = "";
-  const LETN = 19;
+  const LETN = s.size;
   for (let i = 0; i < s.moves.length; i += 2) {
     const row = document.createElement("div");
     row.className = "mv-row";
@@ -447,6 +473,8 @@ function applyState(s: GameState, force = false): void {
   }
 
   // 点目 / 结果流程
+  // 返回原复盘后，后台试下对局的终局状态不能再次弹窗遮住复盘页。
+  if (!document.getElementById("screen-play")!.classList.contains("active")) return;
   if (s.status === "scoring") showScoringDialog();
   else if (!s.result) closeDialog();
   if (s.status === "ended" && s.result) showResultDialog(s);
@@ -581,10 +609,14 @@ function showResultDialog(s: GameState): void {
     </div>
     <div class="actions">
       <button class="btn" id="dlg-close">${t("play.stay")}</button>
-      <button class="btn" id="dlg-menu2">${t("play.back_menu")}</button>
+      <button class="btn" id="dlg-menu2">${t(s.review_source ? "rv.return" : "play.back_menu")}</button>
     </div>`);
   d.querySelector("#dlg-close")!.addEventListener("click", closeDialog);
   d.querySelector("#dlg-menu2")!.addEventListener("click", () => {
+    if (s.review_source) {
+      returnToReview();
+      return;
+    }
     closeDialog();
     showScreen("menu");
   });

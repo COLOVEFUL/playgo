@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from uuid import uuid4
 
 from playgo import settings
 from playgo.rules import BLACK, WHITE, Board, IllegalMove, opponent
@@ -33,6 +34,7 @@ class GameConfig:
     black_name: str = "Black"
     white_name: str = "White"
     takeover: bool = False  # 复盘接管试下：黑白皆由玩家执，终局不存谱
+    review_source: tuple[str, int] | None = None  # 原棋谱与接管手数，供前端返回复盘
 
     def ai_color(self) -> int | None:
         return opponent(self.human_color) if self.mode == MODE_AI else None
@@ -69,7 +71,7 @@ class PlayerClock:
 
 class GameSession:
     def __init__(self, cfg: GameConfig) -> None:
-        self.id = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.id = uuid4().hex  # 同一秒内反复接管也必须视为新对局
         self.cfg = cfg
         self.board = Board(size=cfg.size, komi=cfg.komi)
         self.moves: list[MoveRecord] = []
@@ -96,6 +98,11 @@ class GameSession:
             "ai_color": self.cfg.ai_color(),
             "komi": self.cfg.komi,
             "takeover": self.cfg.takeover,
+            "review_source": (
+                {"file": self.cfg.review_source[0], "moves": self.cfg.review_source[1]}
+                if self.cfg.review_source
+                else None
+            ),
             "time": {
                 "main": self.cfg.time.main_seconds,
                 "byo": self.cfg.time.byo_seconds,

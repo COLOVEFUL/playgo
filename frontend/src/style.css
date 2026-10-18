@@ -236,7 +236,8 @@ table.records .btn { padding: 5px 12px; font-size: 11.5px; }
 
 /* ── 复盘屏 ── */
 .review-bar {
-  flex: 0 0 64px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  flex: 0 0 auto; min-height: 64px; padding: 10px 12px; display: flex; flex-wrap: wrap;
+  align-items: center; justify-content: center; gap: 10px;
   border-top: 1px solid var(--panel-edge); background: linear-gradient(0deg, rgba(20, 15, 9, 0.9), rgba(20, 15, 9, 0.55));
 }
 .nav-btn {

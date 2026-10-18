@@ -37,11 +37,20 @@ on your own machine, no account, no network required after setup.
   full-game analysis needed first
 - **Takeover** — take over any reviewed position and play it out yourself,
   handling both Black and White to verify your reading; free clock, original
-  komi, hints/territory still available; takeover games are not saved
+  board size and komi, hints/territory still available; takeover games are not saved.
+  **Return to review** takes you back to the original record and takeover move
 - **Scoring** — after two passes, or at any moment via the **Score** button:
   the engine marks dead stones and counts both sides with the chosen komi,
   then asks whether you accept the verdict — confirm to end and save the game,
   or keep playing (no moves are undone)
+
+To explore a variation, open a saved game in Records and use the arrows, slider,
+or curve to choose a position. Toggle **AI hint** for live candidates (win rates
+are shown for the side to move), or click **Take over** to play both sides and
+undo moves freely. Click **Return to review** to resume the original replay;
+you can choose another position and take over again. Suggestions refresh as you
+navigate, with loading/error messages; stale results from earlier positions or
+records are discarded. Switching languages preserves the board size and position.
 
 ## 📄 License
 

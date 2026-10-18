@@ -50,6 +50,7 @@ export interface GameState {
   komi: number;
   /** 复盘接管试下：黑白皆由玩家执，不限时，终局不存谱 */
   takeover?: boolean;
+  review_source?: { file: string; moves: number } | null;
   time: { main: number; byo: number; periods: number };
   names: { black: string; white: string };
   status: "playing" | "scoring" | "ended";

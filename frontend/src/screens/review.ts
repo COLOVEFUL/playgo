@@ -17,6 +17,11 @@ let analysis: ReviewAnalysis | null = null;
 let terrToggle = false;
 let hintToggle = false;
 let hintData: HintData | null = null; // 当前局面（= curIdx）的复盘推荐
+let hintRequest = 0;
+let loadRequest = 0;
+let loading = false;
+let takeoverPending = false;
+let hintStatus: "loading" | "error" | null = null;
 
 export function initReview(): void {
   const root = document.getElementById("screen-review")!;
@@ -81,11 +86,13 @@ export function initReview(): void {
   const hintBtn = $("rv-hint");
   hintBtn.classList.toggle("on", hintToggle);
   hintBtn.addEventListener("click", () => {
+    hintRequest++; // 关闭再开启时也不能接收上一次请求
     hintToggle = !hintToggle;
     hintBtn.classList.toggle("on", hintToggle);
     if (hintToggle) void fetchHint();
     else {
       hintData = null;
+      hintStatus = null;
       board.setHints(null);
       render();
     }
@@ -111,6 +118,7 @@ export function initReview(): void {
 
   // 已载入棋谱时恢复显示（首帧或语言切换后）
   if (detail) reapplyReview();
+  updateButtons();
 }
 
 // document/window/bus 级监听只挂一次（initReview 可重复调用于语言切换重建）
@@ -121,7 +129,10 @@ document.addEventListener("keydown", (e) => {
 });
 
 window.addEventListener("open-review", (e) => {
-  void load((e as CustomEvent).detail as string);
+  const source = (e as CustomEvent<string | { file: string; moves: number }>).detail;
+  if (typeof source === "string") void load(source);
+  else if (detail?.file === source.file && !loading) goto(source.moves);
+  else void load(source.file, source.moves);
 });
 
 onWs((ev: WsEvent) => {
@@ -139,15 +150,17 @@ onWs((ev: WsEvent) => {
 });
 
 export async function activateReview(): Promise<void> {
-  if (!detail) {
+  if (!detail && !loading) {
+    const request = loadRequest;
     const list = await api<{ file: string }[]>("/api/records").catch(() => []);
-    if (list.length) await load(list[0].file);
+    if (list.length && !detail && !loading && request === loadRequest) await load(list[0].file);
   }
 }
 
 /** 语言切换后恢复复盘页显示（名称/meta/游标/曲线）。 */
 export function reapplyReview(): void {
   if (!detail) return;
+  if (board.size !== detail.size) board.setSize(detail.size);
   (document.getElementById("rv-slider") as HTMLInputElement).max = String(detail.moves.length);
   document.getElementById("rv-black")!.textContent = detail.black;
   document.getElementById("rv-white")!.textContent = detail.white;
@@ -156,28 +169,55 @@ export function reapplyReview(): void {
   goto(curIdx);
 }
 
-async function load(file: string): Promise<void> {
+function updateButtons(): void {
+  for (const id of ["rv-hint", "rv-terr", "rv-analyze", "rv-takeover"]) {
+    (document.getElementById(id) as HTMLButtonElement).disabled = !detail || loading || takeoverPending;
+  }
+}
+
+async function load(file: string, moves = 0): Promise<void> {
+  const request = ++loadRequest;
+  loading = true;
+  hintRequest++;
+  hintData = null;
+  hintStatus = null;
+  board.setHints(null);
+  updateButtons();
   try {
-    detail = await api<RecordDetail>(`/api/records/${encodeURIComponent(file)}`);
+    const loaded = await api<RecordDetail>(`/api/records/${encodeURIComponent(file)}`);
+    if (request !== loadRequest) return;
+    detail = loaded;
     analysis = detail.analysis;
-    hintData = null; // 换谱后旧推荐作废
+    curIdx = moves;
+    loading = false;
     reapplyReview();
-    board.setSize(detail.size);
-    goto(0);
   } catch (e) {
+    if (request !== loadRequest) return;
     toast(errText(e), true);
+  } finally {
+    if (request === loadRequest) {
+      loading = false;
+      updateButtons();
+    }
   }
 }
 
 async function reloadAnalysis(): Promise<void> {
   if (!detail) return;
-  detail = await api<RecordDetail>(`/api/records/${encodeURIComponent(detail.file)}`);
-  analysis = detail.analysis;
-  render();
+  const current = detail;
+  try {
+    const loaded = await api<RecordDetail>(`/api/records/${encodeURIComponent(current.file)}`);
+    if (detail !== current || loading) return;
+    detail = loaded;
+    analysis = loaded.analysis;
+    render();
+  } catch (e) {
+    if (detail === current && !loading) toast(errText(e), true);
+  }
 }
 
 function goto(n: number): void {
-  if (!detail) return;
+  if (!detail || loading) return;
   const max = detail.moves.length;
   curIdx = Math.max(0, Math.min(max, n));
   (document.getElementById("rv-slider") as HTMLInputElement).value = String(curIdx);
@@ -188,18 +228,29 @@ function goto(n: number): void {
 
 // ── 复盘 AI 推荐：对照"我下的"与"AI 正着"（独立于整谱深度复盘） ──
 async function fetchHint(): Promise<void> {
-  if (!detail || !hintToggle) return;
+  if (!detail || loading || !hintToggle) return;
+  const file = detail.file;
+  const moves = curIdx;
+  const request = ++hintRequest;
+  const isCurrent = () => request === hintRequest && hintToggle && !loading
+    && detail?.file === file && curIdx === moves;
+  hintStatus = "loading";
+  render();
   try {
     const h = await api<HintData>(
-      `/api/review/hint?file=${encodeURIComponent(detail.file)}&moves=${curIdx}`,
+      `/api/review/hint?file=${encodeURIComponent(file)}&moves=${moves}`,
     );
     // 响应到达时已导航离开该局面 → 丢弃
-    if (!hintToggle || !detail || h.move_count !== curIdx) return;
+    if (!isCurrent() || h.move_count !== moves) return;
+    hintStatus = null;
     hintData = h;
     board.setHints(h.moves);
     render();
   } catch (e) {
+    if (!isCurrent()) return;
+    hintStatus = "error";
     toast(errText(e), true);
+    render();
   }
 }
 
@@ -208,6 +259,7 @@ function syncHints(): void {
   if (!hintToggle) return;
   if (hintData && hintData.move_count === curIdx) board.setHints(hintData.moves);
   else {
+    hintData = null;
     board.setHints(null);
     void fetchHint();
   }
@@ -215,7 +267,9 @@ function syncHints(): void {
 
 /** 接管试下：从当前局面起开一盘黑白皆由玩家执的对局（不限时、不存谱）。 */
 async function doTakeover(): Promise<void> {
-  if (!detail) return;
+  if (!detail || loading || takeoverPending) return;
+  takeoverPending = true;
+  updateButtons();
   try {
     const snap = await api<GameState>("/api/review/takeover", {
       file: detail.file,
@@ -226,6 +280,9 @@ async function doTakeover(): Promise<void> {
     showScreen("play");
   } catch (e) {
     toast(errText(e), true);
+  } finally {
+    takeoverPending = false;
+    updateButtons();
   }
 }
 
@@ -245,7 +302,8 @@ function render(): void {
   // 重放到 curIdx（SGF 为合法对局，重放需正确处理提子）
   const grid = new Int8Array(N * N);
   replay(grid, detail, curIdx);
-  board.setPosition(grid, curIdx > 0 ? pointOf(detail.moves[curIdx - 1]) : null, curIdx % 2 === 0 ? BLACK : 2);
+  const last = detail.moves[curIdx - 1];
+  board.setPosition(grid, last?.point ?? null, last ? 3 - last.color : BLACK);
 
   // 形势热力（后端 ownership 已统一为黑方视角）
   if (terrToggle && analysis && analysis.positions[curIdx]) {
@@ -295,6 +353,10 @@ function render(): void {
       coord: coordName(m.point, N),
       p: (wr * 100).toFixed(1),
     })}`;
+  } else if (hintToggle) {
+    const key = hintStatus === "error" ? "rv.hint_failed"
+      : hintStatus === "loading" ? "rv.hint_loading" : "rv.hint_empty";
+    info.innerHTML += `<br>${t(key)}`;
   }
   drawCurve();
 }
@@ -335,10 +397,6 @@ function replay(grid: Int8Array, d: RecordDetail, n: number): void {
     grid[point] = color;
     for (const nb of neighbors(point)) if (grid[nb] && grid[nb] !== color) tryRemove(nb);
   }
-}
-
-function pointOf(m: { color: number; point: number | null }): number | null {
-  return m.point;
 }
 
 // ── 胜率曲线（可点击跳转；黑上白下两极 + 50% 基线） ──
